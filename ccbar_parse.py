@@ -193,18 +193,25 @@ def parse_daily(base_dir):
 
 
 def parse_window(base_dir, hours=5):
-    """Parse tokens from messages within the last N hours (rolling window).
+    """Estimate current plan window usage using block heuristic.
 
-    Unlike parse_daily which uses file mtime, this reads timestamps inside
-    each JSONL file to accurately capture the rolling window that Claude's
-    plan limits use.
+    Claude's plan limit resets every 5h, but the exact reset time isn't
+    exposed locally. This uses the same approach as Claude-Code-Usage-Monitor:
+    1. Collect all timestamped usage entries from recent files
+    2. Sort by timestamp
+    3. Walk backwards from now — detect the current "block" by finding
+       where a gap >= `hours` hours occurs or where we hit the boundary
+       of a window aligned to the nearest full hour
+    4. Sum only tokens within the current block
     """
-    cutoff = datetime.now(timezone.utc) - __import__("datetime").timedelta(hours=hours)
-    total = {"input_tokens": 0, "output_tokens": 0, "cache_write_tokens": 0,
-             "cache_read_tokens": 0, "sessions": 0, "tool_calls": 0}
+    from datetime import timedelta
 
-    # Only scan files modified in the last `hours` hours (optimization)
-    cutoff_ts = cutoff.timestamp()
+    now = datetime.now(timezone.utc)
+    scan_cutoff = now - timedelta(hours=hours * 2)  # scan wider to find block boundary
+    scan_cutoff_ts = scan_cutoff.timestamp()
+
+    # Collect all (timestamp, usage_dict) entries
+    entries = []
 
     for root, dirs, files in os.walk(base_dir):
         dirs[:] = [d for d in dirs if d != "subagents"]
@@ -212,12 +219,8 @@ def parse_window(base_dir, hours=5):
             if not fname.endswith(".jsonl"):
                 continue
             fpath = os.path.join(root, fname)
-            # Skip files not modified since before the window
-            if os.path.getmtime(fpath) < cutoff_ts:
+            if os.path.getmtime(fpath) < scan_cutoff_ts:
                 continue
-
-            tin = tout = tcw = tcr = tools = 0
-            has_recent = False
 
             try:
                 with open(fpath) as fh:
@@ -230,7 +233,6 @@ def parse_window(base_dir, hours=5):
                         except json.JSONDecodeError:
                             continue
 
-                        # Check timestamp is within window
                         ts = obj.get("timestamp")
                         if not ts:
                             continue
@@ -238,40 +240,100 @@ def parse_window(base_dir, hours=5):
                             msg_time = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                         except Exception:
                             continue
-                        if msg_time < cutoff:
+                        if msg_time < scan_cutoff:
                             continue
 
-                        has_recent = True
                         msg = obj.get("message", {})
                         if not isinstance(msg, dict):
                             continue
+                        if msg.get("role") != "assistant":
+                            continue
 
-                        role = msg.get("role", "")
-                        if role == "assistant":
-                            usage = msg.get("usage")
-                            if not isinstance(usage, dict):
-                                usage = obj.get("usage")
-                            if isinstance(usage, dict):
-                                tin += usage.get("input_tokens", 0)
-                                tout += usage.get("output_tokens", 0)
-                                tcw += usage.get("cache_creation_input_tokens", 0)
-                                tcr += usage.get("cache_read_input_tokens", 0)
+                        usage = msg.get("usage")
+                        if not isinstance(usage, dict):
+                            usage = obj.get("usage")
+                        if not isinstance(usage, dict):
+                            continue
 
-                            content = msg.get("content", [])
-                            if isinstance(content, list):
-                                for block in content:
-                                    if isinstance(block, dict) and block.get("type") == "tool_use":
-                                        tools += 1
+                        tools = 0
+                        content = msg.get("content", [])
+                        if isinstance(content, list):
+                            for block in content:
+                                if isinstance(block, dict) and block.get("type") == "tool_use":
+                                    tools += 1
+
+                        entries.append((msg_time, usage, tools))
             except Exception:
                 pass
 
-            if has_recent:
-                total["input_tokens"] += tin
-                total["output_tokens"] += tout
-                total["cache_write_tokens"] += tcw
-                total["cache_read_tokens"] += tcr
-                total["sessions"] += 1
-                total["tool_calls"] += tools
+    if not entries:
+        return {"input_tokens": 0, "output_tokens": 0, "cache_write_tokens": 0,
+                "cache_read_tokens": 0, "sessions": 0, "tool_calls": 0,
+                "window_start": None, "window_end": None}
+
+    entries.sort(key=lambda x: x[0])
+
+    # Check for manual reset file (line 1: timestamp, line 2: base %)
+    # Derive claude home from base_dir (which is <claude_home>/projects)
+    claude_home = os.path.dirname(base_dir.rstrip("/"))
+    reset_file = os.path.join(claude_home, "ccbar_reset")
+    manual_reset = None
+    base_pct = 0
+    if os.path.exists(reset_file):
+        try:
+            with open(reset_file) as f:
+                lines = f.read().strip().split("\n")
+                manual_reset = datetime.fromisoformat(lines[0].strip())
+                if len(lines) > 1:
+                    base_pct = int(lines[1].strip())
+        except Exception:
+            pass
+
+    # Find current block: walk backwards from the most recent entry.
+    # A new block starts when there's a gap >= `hours` hours between entries.
+    block_start_idx = 0
+    for i in range(len(entries) - 1, 0, -1):
+        gap = (entries[i][0] - entries[i - 1][0]).total_seconds() / 3600
+        if gap >= hours:
+            block_start_idx = i
+            break
+
+    # Round block start to nearest full hour (UTC)
+    first_ts = entries[block_start_idx][0]
+    window_start = first_ts.replace(minute=0, second=0, microsecond=0)
+    window_end = window_start + timedelta(hours=hours)
+
+    # If we're past the window end, advance to the current window.
+    # This handles the case where the user worked continuously across
+    # window boundaries without a gap.
+    while window_end <= now:
+        window_start = window_end
+        window_end = window_start + timedelta(hours=hours)
+
+    # Manual reset overrides if it falls within the current window period
+    if manual_reset and manual_reset > window_start:
+        window_start = manual_reset
+        window_end = window_start + timedelta(hours=hours)
+
+    # Sum tokens within the current window
+    total = {"input_tokens": 0, "output_tokens": 0, "cache_write_tokens": 0,
+             "cache_read_tokens": 0, "sessions": 0, "tool_calls": 0,
+             "window_start": window_start.isoformat(),
+             "window_end": window_end.isoformat()}
+
+    count = 0
+    for msg_time, usage, tools in entries:
+        if msg_time < window_start:
+            continue
+        total["input_tokens"] += usage.get("input_tokens", 0)
+        total["output_tokens"] += usage.get("output_tokens", 0)
+        total["cache_write_tokens"] += usage.get("cache_creation_input_tokens", 0)
+        total["cache_read_tokens"] += usage.get("cache_read_input_tokens", 0)
+        total["tool_calls"] += tools
+        count += 1
+
+    total["sessions"] = count
+    total["base_pct"] = base_pct
 
     return total
 

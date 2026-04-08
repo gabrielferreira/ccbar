@@ -160,6 +160,11 @@ print(f'w_tin={w.get(\"input_tokens\", 0)}')
 print(f'w_tout={w.get(\"output_tokens\", 0)}')
 print(f'w_tcw={w.get(\"cache_write_tokens\", 0)}')
 print(f'w_tcr={w.get(\"cache_read_tokens\", 0)}')
+print(f'w_base_pct={w.get(\"base_pct\", 0)}')
+ws = w.get('window_start', '')
+we = w.get('window_end', '')
+print(f'w_start=\"{ws}\"')
+print(f'w_end=\"{we}\"')
 
 # Current project today (from daily per-project breakdown)
 import re
@@ -206,7 +211,7 @@ print(f'proj_count={len(pitems)}')
   if (( plimit > 0 )); then
     s_pct=$(( s_ctx * 100 / plimit ))
     d_pct=$(( d_ctx * 100 / plimit ))
-    w_pct=$(( w_ctx * 100 / plimit ))
+    w_pct=$(( w_ctx * 100 / plimit + w_base_pct ))
     cp_pct=$(( cp_ctx * 100 / plimit ))
   fi
 
@@ -273,7 +278,19 @@ print(f'proj_count={len(pitems)}')
   # ═══ PLAN LIMIT ═══
   if (( plimit > 0 )); then
     hline "$cols"
-    printf "${BOLD}${ORANGE}  PLAN${R}  ${DIM}${pname} — $(fmt_tokens $plimit) tokens / 5h window${R}\n\n"
+    # Window time range display
+    w_range=""
+    if [[ -n "$w_start" && -n "$w_end" ]]; then
+      ws_h=$(python3 -c "from datetime import datetime; t=datetime.fromisoformat('$w_start'); print(t.strftime('%H:%M'))" 2>/dev/null || echo "?")
+      we_h=$(python3 -c "from datetime import datetime; t=datetime.fromisoformat('$w_end'); print(t.strftime('%H:%M'))" 2>/dev/null || echo "?")
+      w_range=" (${ws_h}–${we_h} UTC)"
+    fi
+    base_info=""
+    if (( w_base_pct > 0 )); then
+      base_info=" +${w_base_pct}% base"
+    fi
+
+    printf "${BOLD}${ORANGE}  PLAN${R}  ${DIM}${pname} — $(fmt_tokens $plimit) tokens / 5h window${w_range}${R}\n\n"
 
     sc=$(color_pct "$s_pct")
     cpc=$(color_pct "$cp_pct")
@@ -282,7 +299,7 @@ print(f'proj_count={len(pitems)}')
 
     printf "  ${DIM}session${R}  ${sc}$(bar $s_pct 35)${R} ${sc}%3d%%${R}  $(fmt_tokens $s_ctx)\n" "$s_pct"
     printf "  ${DIM}project${R}  ${cpc}$(bar $cp_pct 35)${R} ${cpc}%3d%%${R}  $(fmt_tokens $cp_ctx)\n" "$cp_pct"
-    printf "  ${DIM}5h wind${R}  ${wc}$(bar $w_pct 35)${R} ${wc}%3d%%${R}  $(fmt_tokens $w_ctx)\n" "$w_pct"
+    printf "  ${DIM}5h wind${R}  ${wc}$(bar $w_pct 35)${R} ${wc}%3d%%${R}  $(fmt_tokens $w_ctx)${GREY}${base_info}${R}\n" "$w_pct"
     printf "  ${DIM}today  ${R}  ${dc}$(bar $d_pct 35)${R} ${dc}%3d%%${R}  $(fmt_tokens $d_ctx)\n" "$d_pct"
 
     if (( w_pct >= 100 )); then

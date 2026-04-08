@@ -33,10 +33,12 @@ Live Claude Code metrics in your terminal. Track token usage, costs, plan limits
   Agent         1 ▪
 
 ────────────────────────────────────────────────────────────────
-  PLAN  Pro — 44k tokens / 5h window
+  PLAN  Pro — 44k tokens / 5h window (12:00–17:00 UTC)
 
   session  █████████░░░░░░░░░░░░░░░░░░░░░░░░░░  21%  9.4M
-  today    ████████████████░░░░░░░░░░░░░░░░░░░░  56%  24.8M
+  project  ████████████░░░░░░░░░░░░░░░░░░░░░░░  35%  15.2M
+  5h wind  ████████████████░░░░░░░░░░░░░░░░░░░░  46%  20.1M
+  today    ████████████████████░░░░░░░░░░░░░░░░  56%  24.8M
 
 ────────────────────────────────────────────────────────────────
   TODAY  12 sessions — 24.8M total tokens
@@ -75,12 +77,15 @@ export CLAUDE_PLAN="pro"  # see Plan Limits below for options
 
 ccbar reads Claude Code's session logs (`~/.claude/projects/**/*.jsonl`) and calculates metrics in real time. The top bar uses ANSI scroll regions to pin a 2-line status header to the top of your terminal — no multiplexer needed.
 
+The 5h window metric estimates your current plan window by detecting gaps in message timestamps and aligning to UTC hour boundaries. Since Claude doesn't expose the exact window reset time locally, this is a heuristic — use `ccbar reset` to correct it manually if needed.
+
 ## Compatibility
 
 | Command | Any terminal (iTerm, etc.) | tmux | cmux |
 |---|---|---|---|
 | `ccbar bar` | Yes | Yes | Yes |
 | `ccbar dashboard` | Yes (current terminal) | Yes (new window) | Yes (new tab) |
+| `ccbar reset [%]` | Yes | Yes | Yes |
 | `ccbar stop` / `stop-all` | Yes | Yes | Yes |
 | `claude_status.sh` | — | Yes (status bar) | — |
 
@@ -114,6 +119,20 @@ ccbar dashboard
 ccbar stop       # stop ccbar for this terminal
 ccbar stop-all   # stop all ccbar processes
 ```
+
+### Window reset
+
+Claude's plan limit resets every 5 hours, but the exact reset time isn't exposed locally. ccbar estimates the current window by analyzing timestamps in the JSONL logs — it detects gaps of 5+ hours between messages and aligns to the nearest full hour (UTC).
+
+If the auto-detection is wrong (e.g., after a rate limit renewal), you can manually mark the window start:
+
+```bash
+ccbar reset        # mark current moment as window start (0% base)
+ccbar reset 20     # mark start with 20% base usage (from web/other machines)
+ccbar reset-clear  # remove manual reset, go back to auto-detection
+```
+
+The base percentage is useful when you've been using Claude on the web or another machine — that usage counts against your plan but doesn't appear in local logs.
 
 ### Per-project filtering
 
@@ -225,7 +244,7 @@ The full dashboard (`ccbar dashboard`) shows:
 | **Session** | Model, duration, ETA, input/output/cache tokens, cost, turns, tool calls, errors |
 | **Tools** | Breakdown by tool name (Bash, Edit, Read, Write, etc.) with visual bars |
 | **Cache** | Hit rate %, estimated savings in USD |
-| **Plan** | Progress bars comparing session vs daily usage against plan limit |
+| **Plan** | Progress bars: session, project, 5h window, and daily usage against plan limit |
 | **Today** | Total tokens, cost, tool calls across all sessions and projects |
 | **Projects** | Per-project breakdown with sessions, tokens, and tool counts |
 
@@ -241,13 +260,33 @@ Costs are calculated using Anthropic API pricing (per 1M tokens):
 
 The model is auto-detected from the session's JSONL data. If detection fails, Sonnet pricing is used as default.
 
+## Custom Claude directory
+
+If you use multiple Claude accounts or a non-default config path, use `--path` to point ccbar to the right directory:
+
+```bash
+ccbar --path ~/.claude-pessoal bar
+ccbar --path ~/.claude-work dashboard
+ccbar --path ~/custom/claude reset 20
+```
+
+The `--path` option sets the root Claude directory (equivalent to `~/.claude`). ccbar will look for session logs in `<path>/projects/` and store the reset file in `<path>/ccbar_reset`.
+
+You can also set this permanently via environment variable:
+
+```bash
+export CLAUDE_HOME=~/.claude-pessoal
+ccbar bar  # uses ~/.claude-pessoal/projects/
+```
+
 ## Environment Variables
 
 | Variable | Default | Description |
 |---|---|---|
 | `CLAUDE_PLAN` | `pro` | Plan tier: `pro`, `max5`, `max20`, `team`, `team-prem`, `api` |
 | `CLAUDE_PROJECT` | `$PWD` | Project path (for per-project filtering) |
-| `CLAUDE_DIR` | `~/.claude/projects` | Path to Claude Code's project data |
+| `CLAUDE_HOME` | `~/.claude` | Root Claude directory (use `--path` flag or this env var) |
+| `CLAUDE_DIR` | `$CLAUDE_HOME/projects` | Path to Claude Code's project data |
 | `FORCE_COLOR` | `0` | Set to `1` to enable tmux colors outside tmux (testing) |
 
 ## Files

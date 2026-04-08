@@ -2,8 +2,10 @@
 # ccbar — launcher for Claude Code status bar
 #
 # Usage:
-#   ccbar bar         Start top bar on current terminal (split)
+#   ccbar [--path <claude-dir>] <command> [args...]
+#   ccbar bar         Start top bar on current terminal
 #   ccbar dashboard   Open dashboard in a new tab
+#   ccbar reset [%]   Mark window start (with optional base usage %)
 #   ccbar stop        Stop all ccbar processes for this surface
 #   ccbar stop-all    Stop all ccbar processes
 
@@ -17,8 +19,30 @@ while [[ -L "$SOURCE" ]]; do
   [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
 done
 SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+
+# Parse --path option before command
+CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
+while [[ "${1:-}" == --* ]]; do
+  case "$1" in
+    --path)
+      shift
+      CLAUDE_HOME="${1:?'--path requires a directory argument'}"
+      # Expand ~ if present
+      CLAUDE_HOME="${CLAUDE_HOME/#\~/$HOME}"
+      shift
+      ;;
+    *)
+      echo "ccbar: unknown option $1" >&2; exit 1
+      ;;
+  esac
+done
+
 CMD="${1:-help}"
 SURFACE="${CMUX_SURFACE_ID:-}"
+
+# Derive CLAUDE_DIR from CLAUDE_HOME (projects subdirectory)
+CLAUDE_DIR="${CLAUDE_DIR:-$CLAUDE_HOME/projects}"
+export CLAUDE_DIR CLAUDE_HOME
 
 # Ensure CLAUDE_PLAN is set (from env, or read from cmux, or default)
 if [[ -z "${CLAUDE_PLAN:-}" ]]; then
@@ -31,15 +55,16 @@ case "$CMD" in
   bar)
     # Setup scroll region and start background updater in THIS terminal
     eval "$("$SCRIPT_DIR/ccbar-header.sh" setup)"
-    CLAUDE_PLAN="$CLAUDE_PLAN" CLAUDE_PROJECT="${CLAUDE_PROJECT:-$PWD}" \
+    CLAUDE_PLAN="$CLAUDE_PLAN" CLAUDE_DIR="$CLAUDE_DIR" CLAUDE_HOME="$CLAUDE_HOME" \
+      CLAUDE_PROJECT="${CLAUDE_PROJECT:-$PWD}" \
       "$SCRIPT_DIR/ccbar-header.sh" update
     # Background loop — must write to the TTY, not /dev/null
-    local tty_dev
     tty_dev=$(tty 2>/dev/null || echo /dev/tty)
     (
       while true; do
         sleep "${2:-10}"
-        CLAUDE_PLAN="$CLAUDE_PLAN" CLAUDE_PROJECT="${CLAUDE_PROJECT:-$PWD}" \
+        CLAUDE_PLAN="$CLAUDE_PLAN" CLAUDE_DIR="$CLAUDE_DIR" CLAUDE_HOME="$CLAUDE_HOME" \
+          CLAUDE_PROJECT="${CLAUDE_PROJECT:-$PWD}" \
           "$SCRIPT_DIR/ccbar-header.sh" update
       done
     ) > "$tty_dev" 2>/dev/null &
@@ -58,19 +83,19 @@ case "$CMD" in
         echo "ccbar: failed to create tab: $result" >&2; exit 1
       fi
       cmux rename-tab --surface "$new_surface" "ccbar dashboard" 2>/dev/null || true
-      cmux send --surface "$new_surface" "export CLAUDE_PLAN='${CLAUDE_PLAN}' CLAUDE_PROJECT='${project_path}' && '${SCRIPT_DIR}/ccbar-dashboard.sh' 10"$'\r' 2>/dev/null
+      cmux send --surface "$new_surface" "export CLAUDE_PLAN='${CLAUDE_PLAN}' CLAUDE_PROJECT='${project_path}' CLAUDE_DIR='${CLAUDE_DIR}' CLAUDE_HOME='${CLAUDE_HOME}' && '${SCRIPT_DIR}/ccbar-dashboard.sh' 10"$'\r' 2>/dev/null
       echo "ccbar: dashboard opened on $new_surface (plan=${CLAUDE_PLAN}, project=$(basename "$project_path"))"
 
     elif [[ -n "${TMUX:-}" ]]; then
       # tmux: open in new window
       tmux new-window -n "ccbar dashboard" \
-        "CLAUDE_PLAN='${CLAUDE_PLAN}' CLAUDE_PROJECT='${project_path}' '${SCRIPT_DIR}/ccbar-dashboard.sh' 10"
+        "CLAUDE_PLAN='${CLAUDE_PLAN}' CLAUDE_PROJECT='${project_path}' CLAUDE_DIR='${CLAUDE_DIR}' CLAUDE_HOME='${CLAUDE_HOME}' '${SCRIPT_DIR}/ccbar-dashboard.sh' 10"
       echo "ccbar: dashboard opened in new tmux window (plan=${CLAUDE_PLAN}, project=$(basename "$project_path"))"
 
     else
       # standalone: run in current terminal
       echo "ccbar: starting dashboard (plan=${CLAUDE_PLAN}, project=$(basename "$project_path"))"
-      CLAUDE_PLAN="$CLAUDE_PLAN" CLAUDE_PROJECT="$project_path" \
+      CLAUDE_PLAN="$CLAUDE_PLAN" CLAUDE_PROJECT="$project_path" CLAUDE_DIR="$CLAUDE_DIR" CLAUDE_HOME="$CLAUDE_HOME" \
         exec "$SCRIPT_DIR/ccbar-dashboard.sh" 10
     fi
     ;;
@@ -90,12 +115,38 @@ case "$CMD" in
     pkill -f "ccbar-bar.sh\|ccbar-dashboard.sh\|ccbar-cmux.sh\|ccbar-panel.sh" 2>/dev/null && echo "ccbar: all stopped" || echo "ccbar: nothing running"
     ;;
 
+  reset)
+    # Manual window reset — saves current UTC timestamp and optional base usage %
+    reset_file="$CLAUDE_HOME/ccbar_reset"
+    base_pct="${2:-0}"
+    mkdir -p "$CLAUDE_HOME"
+    printf "%s\n%s" "$(date -u +"%Y-%m-%dT%H:%M:%S+00:00")" "$base_pct" > "$reset_file"
+    if (( base_pct > 0 )); then
+      echo "ccbar: window reset at $(head -1 "$reset_file") with ${base_pct}% base usage"
+    else
+      echo "ccbar: window reset at $(head -1 "$reset_file")"
+    fi
+    echo "ccbar: 5h window will now count from this moment"
+    ;;
+
+  reset-clear)
+    # Remove manual reset
+    rm -f "$CLAUDE_HOME/ccbar_reset"
+    echo "ccbar: manual reset cleared, using auto-detection"
+    ;;
+
   help|*)
-    echo "Usage: ccbar <bar|dashboard|stop|stop-all>"
+    echo "Usage: ccbar [--path <claude-dir>] <command> [args...]"
     echo ""
-    echo "  bar        — top bar on current terminal"
-    echo "  dashboard  — full dashboard in a new tab"
-    echo "  stop       — stop ccbar for this terminal"
-    echo "  stop-all   — stop all ccbar processes"
+    echo "Commands:"
+    echo "  bar          — top bar on current terminal"
+    echo "  dashboard    — full dashboard in a new tab"
+    echo "  reset [%]    — mark window start (optional base usage %)"
+    echo "  reset-clear  — remove manual reset, use auto-detection"
+    echo "  stop         — stop ccbar for this terminal"
+    echo "  stop-all     — stop all ccbar processes"
+    echo ""
+    echo "Options:"
+    echo "  --path DIR   — use DIR instead of ~/.claude (e.g. ~/.claude-pessoal)"
     ;;
 esac

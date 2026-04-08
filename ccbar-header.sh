@@ -193,6 +193,17 @@ print(f'turns={turns};tools={tools};errors={errors};cost="{scost:.2f}";cache_pct
 print(f'ptin={ptin};ptout={ptout};pctx={pctx};psess={psess};pcost="{pcost:.2f}"')
 print(f'dtin={dtin};dtout={dtout};dctx={dctx};dsess={dsess};dcost="{dcost:.2f}"')
 print(f'wctx={wctx};wsess={wsess}')
+
+# 5. Manual reset base %
+import os as _os
+_rf=_os.path.join(_os.path.dirname(base.rstrip("/")),"ccbar_reset")
+_bp=0
+if _os.path.exists(_rf):
+    try:
+        _lines=open(_rf).read().strip().split("\n")
+        if len(_lines)>1: _bp=int(_lines[1].strip())
+    except: pass
+print(f'w_base_pct={_bp}')
 PYEOF
   )" 2>/dev/null
 
@@ -215,7 +226,7 @@ PYEOF
   if (( plimit > 0 )); then
     (( pctx > 0 )) && p_pct=$(( pctx * 100 / plimit ))
     (( dctx > 0 )) && d_pct=$(( dctx * 100 / plimit ))
-    (( wctx > 0 )) && w_pct=$(( wctx * 100 / plimit ))
+    (( wctx > 0 )) && w_pct=$(( wctx * 100 / plimit + w_base_pct ))
   fi
 
   # Color codes
@@ -285,7 +296,7 @@ SETUPEOF
 
   update)
     # Re-apply scroll region (in case another program reset it)
-    local lines=${LINES:-$(tput lines 2>/dev/null || echo 24)}
+    lines=${LINES:-$(tput lines 2>/dev/null || echo 24)}
     printf '\e7'                    # save cursor
     printf '\e[3;%dr' "$lines"     # re-apply scroll region
     printf '\e[1;1H'               # move to line 1, col 1
