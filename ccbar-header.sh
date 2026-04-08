@@ -123,6 +123,43 @@ def daily_sum(directory):
             except: pass
     return ti,to,cw,cr,sess
 
+def window_sum(directory, hours=5):
+    from datetime import timedelta
+    cutoff=datetime.now(timezone.utc)-timedelta(hours=hours)
+    cutoff_ts=cutoff.timestamp()
+    ti=to=cw=cr=sess=0
+    for root,dirs,files in os.walk(directory):
+        dirs[:]=[d for d in dirs if d!="subagents"]
+        for fn in files:
+            if not fn.endswith(".jsonl"): continue
+            fp=os.path.join(root,fn)
+            if os.path.getmtime(fp)<cutoff_ts: continue
+            fti=fto=fcw=fcr=0; has=False
+            try:
+                with open(fp) as fh:
+                    for l in fh:
+                        l=l.strip()
+                        if not l: continue
+                        try: o=json.loads(l)
+                        except: continue
+                        ts=o.get("timestamp")
+                        if not ts: continue
+                        try: mt=datetime.fromisoformat(ts.replace("Z","+00:00"))
+                        except: continue
+                        if mt<cutoff: continue
+                        has=True
+                        msg=o.get("message",{})
+                        if not isinstance(msg,dict): continue
+                        u=msg.get("usage") if msg.get("role")=="assistant" else None
+                        if u is None and msg.get("role")=="assistant": u=o.get("usage")
+                        if not isinstance(u,dict): continue
+                        fti+=u.get("input_tokens",0);fto+=u.get("output_tokens",0)
+                        fcw+=u.get("cache_creation_input_tokens",0);fcr+=u.get("cache_read_input_tokens",0)
+            except: pass
+            if has:
+                ti+=fti;to+=fto;cw+=fcw;cr+=fcr;sess+=1
+    return ti,to,cw,cr,sess
+
 # 1. This session
 tin,tout,tcw,tcr,turns,tools,errors,timestamps,model=sum_tokens(session_file)
 dur_s=0
@@ -147,10 +184,15 @@ dtin,dtout,dtcw,dtcr,dsess=daily_sum(base)
 dctx=dtin+dtcw+dtcr
 dcost=(dtin*3+dtout*15+dtcw*3.75+dtcr*0.3)/1e6
 
+# 4. 5h rolling window
+wtin,wtout,wtcw,wtcr,wsess=window_sum(base)
+wctx=wtin+wtcw+wtcr
+
 print(f'ctx={ctx};tin={tin};tout={tout};dur="{dur}";mins={mins}')
 print(f'turns={turns};tools={tools};errors={errors};cost="{scost:.2f}";cache_pct="{cache_pct}"')
 print(f'ptin={ptin};ptout={ptout};pctx={pctx};psess={psess};pcost="{pcost:.2f}"')
 print(f'dtin={dtin};dtout={dtout};dctx={dctx};dsess={dsess};dcost="{dcost:.2f}"')
+print(f'wctx={wctx};wsess={wsess}')
 PYEOF
   )" 2>/dev/null
 
@@ -159,20 +201,21 @@ PYEOF
   pct=0; eta=""
   if (( plimit > 0 && ctx > 0 )); then
     pct=$(( ctx * 100 / plimit ))
-    if (( mins > 0 && ctx < plimit )); then
-      local rem=$(( (plimit - ctx) * mins / ctx ))
+    if (( mins > 0 && wctx < plimit )); then
+      local rem=$(( (plimit - wctx) * mins / ctx ))
       if (( rem >= 60 )); then eta=" ~$(( rem / 60 ))h$(printf '%02d' $(( rem % 60 )))m"
       else eta=" ~${rem}m"; fi
-    elif (( ctx >= plimit )); then
+    elif (( wctx >= plimit )); then
       eta=" ⚠exceeded"
     fi
   fi
 
   # Percentages
-  local p_pct=0 d_pct=0
+  local p_pct=0 d_pct=0 w_pct=0
   if (( plimit > 0 )); then
     (( pctx > 0 )) && p_pct=$(( pctx * 100 / plimit ))
     (( dctx > 0 )) && d_pct=$(( dctx * 100 / plimit ))
+    (( wctx > 0 )) && w_pct=$(( wctx * 100 / plimit ))
   fi
 
   # Color codes
@@ -193,8 +236,9 @@ PYEOF
   echo ""
 
   # Line 2: project today | global today | limit bar
-  local pc dc
+  local pc dc wc
   if   (( p_pct >= 80 )); then pc=$RED; elif (( p_pct >= 50 )); then pc=$YELLOW; else pc=$GREEN; fi
+  if   (( w_pct >= 80 )); then wc=$RED; elif (( w_pct >= 50 )); then wc=$YELLOW; else wc=$GREEN; fi
   if   (( d_pct >= 80 )); then dc=$RED; elif (( d_pct >= 50 )); then dc=$YELLOW; else dc=$GREEN; fi
 
   printf "${BG} ${DIM}proj${R}${BG} ${YELLOW}\$${pcost}${R}${BG} ${GREY}${psess}sess${R}${BG}"
@@ -202,20 +246,23 @@ PYEOF
 
   if (( plimit > 0 )); then
     printf " ${GREY}│${R}${BG} "
-    local bar_len=12 s_fill p_fill d_fill
+    local bar_len=12 s_fill p_fill w_fill d_fill
     s_fill=$(( pct * bar_len / 100 ))
     p_fill=$(( p_pct * bar_len / 100 ))
+    w_fill=$(( w_pct * bar_len / 100 ))
     d_fill=$(( d_pct * bar_len / 100 ))
     (( s_fill > bar_len )) && s_fill=$bar_len
     (( p_fill > bar_len )) && p_fill=$bar_len
+    (( w_fill > bar_len )) && w_fill=$bar_len
     (( d_fill > bar_len )) && d_fill=$bar_len
     for (( i=0; i<bar_len; i++ )); do
       if (( i < s_fill )); then printf "${sc}█${R}${BG}"
       elif (( i < p_fill )); then printf "${pc}▓${R}${BG}"
-      elif (( i < d_fill )); then printf "${dc}▒${R}${BG}"
+      elif (( i < w_fill )); then printf "${wc}▒${R}${BG}"
+      elif (( i < d_fill )); then printf "${dc}░${R}${BG}"
       else printf "${GREY}░${R}${BG}"; fi
     done
-    printf " ${sc}s${pct}%%${R}${BG} ${pc}p${p_pct}%%${R}${BG} ${dc}t${d_pct}%%${R}${BG}"
+    printf " ${sc}s${pct}%%${R}${BG} ${pc}p${p_pct}%%${R}${BG} ${wc}w${w_pct}%%${R}${BG} ${dc}t${d_pct}%%${R}${BG}"
   fi
 }
 
@@ -237,13 +284,16 @@ SETUPEOF
     ;;
 
   update)
-    # Write status to lines 1-2 without disturbing cursor
-    printf '\e7'           # save cursor
-    printf '\e[1;1H'       # move to line 1, col 1
+    # Re-apply scroll region (in case another program reset it)
+    local lines=${LINES:-$(tput lines 2>/dev/null || echo 24)}
+    printf '\e7'                    # save cursor
+    printf '\e[3;%dr' "$lines"     # re-apply scroll region
+    printf '\e[1;1H'               # move to line 1, col 1
     printf '\e[K'
     get_status_lines
     printf '\e[K'
-    printf '\e8'           # restore cursor
+    printf '\e[3;1H'               # move cursor below header
+    printf '\e8'                   # restore cursor
     ;;
 
   start)

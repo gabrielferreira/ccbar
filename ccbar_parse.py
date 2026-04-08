@@ -192,10 +192,95 @@ def parse_daily(base_dir):
     return {"projects": projects, "total": total}
 
 
+def parse_window(base_dir, hours=5):
+    """Parse tokens from messages within the last N hours (rolling window).
+
+    Unlike parse_daily which uses file mtime, this reads timestamps inside
+    each JSONL file to accurately capture the rolling window that Claude's
+    plan limits use.
+    """
+    cutoff = datetime.now(timezone.utc) - __import__("datetime").timedelta(hours=hours)
+    total = {"input_tokens": 0, "output_tokens": 0, "cache_write_tokens": 0,
+             "cache_read_tokens": 0, "sessions": 0, "tool_calls": 0}
+
+    # Only scan files modified in the last `hours` hours (optimization)
+    cutoff_ts = cutoff.timestamp()
+
+    for root, dirs, files in os.walk(base_dir):
+        dirs[:] = [d for d in dirs if d != "subagents"]
+        for fname in files:
+            if not fname.endswith(".jsonl"):
+                continue
+            fpath = os.path.join(root, fname)
+            # Skip files not modified since before the window
+            if os.path.getmtime(fpath) < cutoff_ts:
+                continue
+
+            tin = tout = tcw = tcr = tools = 0
+            has_recent = False
+
+            try:
+                with open(fpath) as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            obj = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+
+                        # Check timestamp is within window
+                        ts = obj.get("timestamp")
+                        if not ts:
+                            continue
+                        try:
+                            msg_time = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                        except Exception:
+                            continue
+                        if msg_time < cutoff:
+                            continue
+
+                        has_recent = True
+                        msg = obj.get("message", {})
+                        if not isinstance(msg, dict):
+                            continue
+
+                        role = msg.get("role", "")
+                        if role == "assistant":
+                            usage = msg.get("usage")
+                            if not isinstance(usage, dict):
+                                usage = obj.get("usage")
+                            if isinstance(usage, dict):
+                                tin += usage.get("input_tokens", 0)
+                                tout += usage.get("output_tokens", 0)
+                                tcw += usage.get("cache_creation_input_tokens", 0)
+                                tcr += usage.get("cache_read_input_tokens", 0)
+
+                            content = msg.get("content", [])
+                            if isinstance(content, list):
+                                for block in content:
+                                    if isinstance(block, dict) and block.get("type") == "tool_use":
+                                        tools += 1
+            except Exception:
+                pass
+
+            if has_recent:
+                total["input_tokens"] += tin
+                total["output_tokens"] += tout
+                total["cache_write_tokens"] += tcw
+                total["cache_read_tokens"] += tcr
+                total["sessions"] += 1
+                total["tool_calls"] += tools
+
+    return total
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--session", help="Path to a .jsonl session file")
     parser.add_argument("--daily", help="Path to claude projects directory")
+    parser.add_argument("--window", help="Path to claude projects directory (for 5h rolling window)")
     args = parser.parse_args()
 
     result = {}
@@ -205,6 +290,9 @@ def main():
 
     if args.daily:
         result["daily"] = parse_daily(args.daily)
+
+    if args.window:
+        result["window"] = parse_window(args.window)
 
     json.dump(result, sys.stdout)
 

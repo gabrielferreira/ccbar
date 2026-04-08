@@ -108,9 +108,9 @@ while true; do
 
   # ── Parse data ──
   if [[ -n "$file" ]]; then
-    data=$(python3 "$SCRIPT_DIR/ccbar_parse.py" --session "$file" --daily "$CLAUDE_DIR" 2>/dev/null)
+    data=$(python3 "$SCRIPT_DIR/ccbar_parse.py" --session "$file" --daily "$CLAUDE_DIR" --window "$CLAUDE_DIR" 2>/dev/null)
   else
-    data=$(python3 "$SCRIPT_DIR/ccbar_parse.py" --daily "$CLAUDE_DIR" 2>/dev/null)
+    data=$(python3 "$SCRIPT_DIR/ccbar_parse.py" --daily "$CLAUDE_DIR" --window "$CLAUDE_DIR" 2>/dev/null)
   fi
 
   # ── Extract fields via Python ──
@@ -154,6 +154,23 @@ print(f'd_tcr={dt.get(\"cache_read_tokens\", 0)}')
 print(f'd_sessions={dt.get(\"sessions\", 0)}')
 print(f'd_tools={dt.get(\"tool_calls\", 0)}')
 
+# 5h rolling window
+w = d.get('window', {})
+print(f'w_tin={w.get(\"input_tokens\", 0)}')
+print(f'w_tout={w.get(\"output_tokens\", 0)}')
+print(f'w_tcw={w.get(\"cache_write_tokens\", 0)}')
+print(f'w_tcr={w.get(\"cache_read_tokens\", 0)}')
+
+# Current project today (from daily per-project breakdown)
+import re
+proj_encoded = re.sub(r'[/.]', '-', '$PROJECT')
+cp = projects.get(proj_encoded, {})
+print(f'cp_tin={cp.get(\"input_tokens\", 0)}')
+print(f'cp_tout={cp.get(\"output_tokens\", 0)}')
+print(f'cp_tcw={cp.get(\"cache_write_tokens\", 0)}')
+print(f'cp_tcr={cp.get(\"cache_read_tokens\", 0)}')
+print(f'cp_sessions={cp.get(\"sessions\", 0)}')
+
 # Per-project breakdown (top 5)
 pitems = sorted(projects.items(), key=lambda x: -(x[1]['output_tokens']+x[1]['input_tokens']))[:5]
 for i, (name, info) in enumerate(pitems):
@@ -181,12 +198,16 @@ print(f'proj_count={len(pitems)}')
   s_cost=$(calc_cost "$s_tin" "$s_tout" "$s_tcw" "$s_tcr" "$s_model")
   d_ctx=$(( d_tin + d_tcw + d_tcr ))
   d_cost=$(calc_cost "$d_tin" "$d_tout" "$d_tcw" "$d_tcr" "sonnet")
+  w_ctx=$(( w_tin + w_tcw + w_tcr ))
+  cp_ctx=$(( cp_tin + cp_tcw + cp_tcr ))
 
   # ── Percentages ──
-  s_pct=0; d_pct=0
+  s_pct=0; d_pct=0; w_pct=0; cp_pct=0
   if (( plimit > 0 )); then
     s_pct=$(( s_ctx * 100 / plimit ))
     d_pct=$(( d_ctx * 100 / plimit ))
+    w_pct=$(( w_ctx * 100 / plimit ))
+    cp_pct=$(( cp_ctx * 100 / plimit ))
   fi
 
   # ── ETA ──
@@ -255,14 +276,18 @@ print(f'proj_count={len(pitems)}')
     printf "${BOLD}${ORANGE}  PLAN${R}  ${DIM}${pname} — $(fmt_tokens $plimit) tokens / 5h window${R}\n\n"
 
     sc=$(color_pct "$s_pct")
+    cpc=$(color_pct "$cp_pct")
+    wc=$(color_pct "$w_pct")
     dc=$(color_pct "$d_pct")
 
     printf "  ${DIM}session${R}  ${sc}$(bar $s_pct 35)${R} ${sc}%3d%%${R}  $(fmt_tokens $s_ctx)\n" "$s_pct"
+    printf "  ${DIM}project${R}  ${cpc}$(bar $cp_pct 35)${R} ${cpc}%3d%%${R}  $(fmt_tokens $cp_ctx)\n" "$cp_pct"
+    printf "  ${DIM}5h wind${R}  ${wc}$(bar $w_pct 35)${R} ${wc}%3d%%${R}  $(fmt_tokens $w_ctx)\n" "$w_pct"
     printf "  ${DIM}today  ${R}  ${dc}$(bar $d_pct 35)${R} ${dc}%3d%%${R}  $(fmt_tokens $d_ctx)\n" "$d_pct"
 
-    if (( s_pct >= 100 || d_pct >= 100 )); then
+    if (( w_pct >= 100 )); then
       printf "\n  ${RED}${BOLD}⚠  LIMIT EXCEEDED${R}${RED} — consider waiting for the next 5h window${R}\n"
-    elif (( s_pct >= 80 || d_pct >= 80 )); then
+    elif (( w_pct >= 80 )); then
       printf "\n  ${YELLOW}⚠  Approaching limit${R}\n"
     fi
     echo ""

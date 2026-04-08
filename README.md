@@ -2,6 +2,7 @@
 
 Live Claude Code metrics in your terminal. Track token usage, costs, plan limits, tool calls, and cache efficiency — works with any terminal emulator, tmux, and [cmux](https://cmux.dev).
 
+[![CI](https://github.com/gabrielferreira/ccbar/actions/workflows/ci.yml/badge.svg)](https://github.com/gabrielferreira/ccbar/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ## Preview

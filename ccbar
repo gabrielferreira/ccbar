@@ -33,14 +33,16 @@ case "$CMD" in
     eval "$("$SCRIPT_DIR/ccbar-header.sh" setup)"
     CLAUDE_PLAN="$CLAUDE_PLAN" CLAUDE_PROJECT="${CLAUDE_PROJECT:-$PWD}" \
       "$SCRIPT_DIR/ccbar-header.sh" update
-    # Background loop
+    # Background loop — must write to the TTY, not /dev/null
+    local tty_dev
+    tty_dev=$(tty 2>/dev/null || echo /dev/tty)
     (
       while true; do
         sleep "${2:-10}"
         CLAUDE_PLAN="$CLAUDE_PLAN" CLAUDE_PROJECT="${CLAUDE_PROJECT:-$PWD}" \
           "$SCRIPT_DIR/ccbar-header.sh" update
       done
-    ) &>/dev/null &
+    ) > "$tty_dev" 2>/dev/null &
     disown
     echo "ccbar: header started (refreshing every ${2:-10}s)"
     ;;
