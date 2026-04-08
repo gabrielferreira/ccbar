@@ -295,16 +295,12 @@ SETUPEOF
     ;;
 
   update)
-    # Re-apply scroll region (in case another program reset it)
+    # Buffer output FIRST (Python is slow), then write atomically
+    # to minimize cursor displacement time and avoid eating user input
+    buf=$(get_status_lines 2>/dev/null)
     lines=${LINES:-$(tput lines 2>/dev/null || echo 24)}
-    printf '\e7'                    # save cursor
-    printf '\e[3;%dr' "$lines"     # re-apply scroll region
-    printf '\e[1;1H'               # move to line 1, col 1
-    printf '\e[K'
-    get_status_lines
-    printf '\e[K'
-    printf '\e[3;1H'               # move cursor below header
-    printf '\e8'                   # restore cursor
+    # Single atomic write: save cursor, re-apply scroll region, draw, restore
+    printf '\e7\e[3;%dr\e[1;1H\e[K%s\e[K\e8' "$lines" "$buf"
     ;;
 
   start)
