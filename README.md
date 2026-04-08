@@ -95,6 +95,7 @@ The 5h window metric estimates your current plan window by detecting gaps in mes
 | `ccbar bar` | Yes | Yes | Yes |
 | `ccbar title` | Yes | Yes | Yes |
 | `ccbar dashboard` | Yes (current terminal) | Yes (new window) | Yes (new tab) |
+| `ccbar float` | Yes (new window) | Yes (popup) | Yes (new tab) |
 | `ccbar reset [%]` | Yes | Yes | Yes |
 | `ccbar stop` / `stop-all` | Yes | Yes | Yes |
 | `claude_status.sh` | — | Yes (status bar) | — |
@@ -120,6 +121,18 @@ Shows compact metrics in the terminal window/tab title. No cursor manipulation, 
 ```bash
 ccbar title
 ```
+
+### Float
+
+Opens the dashboard in a floating overlay without leaving your current terminal.
+
+```bash
+ccbar float
+```
+
+- In **tmux**: opens a `display-popup` (press `q` or `Ctrl-C` to close)
+- In **cmux**: opens in a new tab
+- **macOS standalone**: opens a new iTerm2 or Terminal.app window
 
 ### Dashboard
 
@@ -355,7 +368,7 @@ ccbar bar  # uses ~/.claude-pessoal/projects/
 
 ### `printf: X.X: invalid number` errors
 
-Token counts in some JSONL files are stored as floats (`44000.0` instead of `44000`). This was fixed in [v1.0.0](https://github.com/gabrielferreira/ccbar/releases/tag/v1.0.0). Update your installation:
+Token counts in some JSONL files are stored as floats (`44000.0` instead of `44000`). This was fixed in [v1.0.0](https://github.com/gabrielferreira/ccbar/releases/tag/v1.1.0). Update your installation:
 
 ```bash
 # Homebrew
