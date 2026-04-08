@@ -84,6 +84,7 @@ The 5h window metric estimates your current plan window by detecting gaps in mes
 | Command | Any terminal (iTerm, etc.) | tmux | cmux |
 |---|---|---|---|
 | `ccbar bar` | Yes | Yes | Yes |
+| `ccbar title` | Yes | Yes | Yes |
 | `ccbar dashboard` | Yes (current terminal) | Yes (new window) | Yes (new tab) |
 | `ccbar reset [%]` | Yes | Yes | Yes |
 | `ccbar stop` / `stop-all` | Yes | Yes | Yes |
@@ -100,6 +101,16 @@ ccbar bar
 ```
 
 Each terminal tracks its **own project** — if you have 3 terminals on different projects, each bar shows that project's data.
+
+When a TUI app like Claude Code CLI is detected in the foreground, the bar automatically pauses scroll region updates and falls back to updating the terminal title instead — no flickering or lost input.
+
+### Title mode
+
+Shows compact metrics in the terminal window/tab title. No cursor manipulation, no scroll regions — fully compatible with Claude Code CLI and any other TUI. Best for use in the same terminal as Claude.
+
+```bash
+ccbar title
+```
 
 ### Dashboard
 

@@ -55,16 +55,16 @@ case "$CMD" in
   bar)
     # Setup scroll region and start background updater in THIS terminal
     eval "$("$SCRIPT_DIR/ccbar-header.sh" setup)"
+    tty_dev=$(tty 2>/dev/null || echo /dev/tty)
     CLAUDE_PLAN="$CLAUDE_PLAN" CLAUDE_DIR="$CLAUDE_DIR" CLAUDE_HOME="$CLAUDE_HOME" \
-      CLAUDE_PROJECT="${CLAUDE_PROJECT:-$PWD}" \
+      CLAUDE_PROJECT="${CLAUDE_PROJECT:-$PWD}" CCBAR_TTY="$tty_dev" \
       "$SCRIPT_DIR/ccbar-header.sh" update
     # Background loop — must write to the TTY, not /dev/null
-    tty_dev=$(tty 2>/dev/null || echo /dev/tty)
     (
       while true; do
         sleep "${2:-10}"
         CLAUDE_PLAN="$CLAUDE_PLAN" CLAUDE_DIR="$CLAUDE_DIR" CLAUDE_HOME="$CLAUDE_HOME" \
-          CLAUDE_PROJECT="${CLAUDE_PROJECT:-$PWD}" \
+          CLAUDE_PROJECT="${CLAUDE_PROJECT:-$PWD}" CCBAR_TTY="$tty_dev" \
           "$SCRIPT_DIR/ccbar-header.sh" update
       done
     ) > "$tty_dev" 2>/dev/null &
@@ -98,6 +98,27 @@ case "$CMD" in
       CLAUDE_PLAN="$CLAUDE_PLAN" CLAUDE_PROJECT="$project_path" CLAUDE_DIR="$CLAUDE_DIR" CLAUDE_HOME="$CLAUDE_HOME" \
         exec "$SCRIPT_DIR/ccbar-dashboard.sh" 10
     fi
+    ;;
+
+  title)
+    # Update terminal title with compact metrics — no scroll regions, no cursor
+    # manipulation, works alongside any TUI including Claude CLI
+    tty_dev=$(tty 2>/dev/null || echo /dev/tty)
+    _update_title() {
+      buf=$(CLAUDE_PLAN="$CLAUDE_PLAN" CLAUDE_DIR="$CLAUDE_DIR" CLAUDE_HOME="$CLAUDE_HOME" \
+        CLAUDE_PROJECT="${CLAUDE_PROJECT:-$PWD}" \
+        "$SCRIPT_DIR/ccbar-header.sh" title 2>/dev/null)
+      printf '\e]0;%s\a' "$buf" > "$tty_dev"
+    }
+    _update_title
+    (
+      while true; do
+        sleep "${2:-10}"
+        _update_title
+      done
+    ) &>/dev/null &
+    disown
+    echo "ccbar: title mode started (refreshing every ${2:-10}s)"
     ;;
 
   stop)
@@ -139,7 +160,8 @@ case "$CMD" in
     echo "Usage: ccbar [--path <claude-dir>] <command> [args...]"
     echo ""
     echo "Commands:"
-    echo "  bar          — top bar on current terminal"
+    echo "  bar          — top bar (scroll region, auto-pauses for TUI apps)"
+    echo "  title        — metrics in terminal title (safe with Claude CLI)"
     echo "  dashboard    — full dashboard in a new tab"
     echo "  reset [%]    — mark window start (optional base usage %)"
     echo "  reset-clear  — remove manual reset, use auto-detection"

@@ -295,12 +295,36 @@ SETUPEOF
     ;;
 
   update)
+    # Skip update if a TUI app (like Claude CLI) is the foreground process.
+    # Writing scroll regions while a TUI is active causes flickering,
+    # lost input, and broken rendering.
+    if [[ -n "${CCBAR_TTY:-}" ]]; then
+      fg_cmd=$(ps -o stat=,comm= -t "${CCBAR_TTY#/dev/}" 2>/dev/null | awk '/^S\+/ || /^\+/ {print $NF}' | head -1)
+      case "$fg_cmd" in
+        *claude*|*vim*|*nvim*|*less*|*man*|*top*|*htop*)
+          # TUI is active — update terminal title as fallback instead
+          buf=$(get_status_lines 2>/dev/null)
+          clean=$(printf '%s' "$buf" | sed 's/\x1b\[[0-9;]*m//g' | tr '\n' ' ' | sed 's/  */ /g')
+          printf '\e]0;ccbar │ %s\a' "$clean"
+          exit 0
+          ;;
+      esac
+    fi
+
     # Buffer output FIRST (Python is slow), then write atomically
     # to minimize cursor displacement time and avoid eating user input
     buf=$(get_status_lines 2>/dev/null)
     lines=${LINES:-$(tput lines 2>/dev/null || echo 24)}
     # Single atomic write: save cursor, re-apply scroll region, draw, restore
     printf '\e7\e[3;%dr\e[1;1H\e[K%s\e[K\e8' "$lines" "$buf"
+    ;;
+
+  title)
+    # Output compact plain-text metrics for terminal title (no ANSI colors)
+    get_status_lines 2>/dev/null | \
+      sed 's/\x1b\[[0-9;]*m//g' | \
+      tr '\n' ' ' | \
+      sed 's/  */ /g; s/^ //; s/ $//'
     ;;
 
   start)

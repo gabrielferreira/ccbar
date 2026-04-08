@@ -287,7 +287,7 @@ print(f'proj_count={len(pitems)}')
     fi
     base_info=""
     if (( w_base_pct > 0 )); then
-      base_info=" +${w_base_pct}% base"
+      base_info=" +${w_base_pct}%% base"  # double %% for printf escaping
     fi
 
     printf "${BOLD}${ORANGE}  PLAN${R}  ${DIM}${pname} — $(fmt_tokens $plimit) tokens / 5h window${w_range}${R}\n\n"
