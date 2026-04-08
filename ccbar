@@ -157,6 +157,7 @@ case "$CMD" in
     ;;
 
   help|*)
+    echo "ccbar $(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo '?')"
     echo "Usage: ccbar [--path <claude-dir>] <command> [args...]"
     echo ""
     echo "Commands:"

@@ -25,7 +25,7 @@ PROJECT="${CLAUDE_PROJECT:-$PWD}"
 HEADER_LINES=2
 
 fmt_t() {
-  local n=$1
+  local n=${1%%.*}  # strip decimal part (tokens can come as floats from JSON)
   if   (( n >= 1000000 )); then printf "%.1fM" "$(echo "scale=1; $n/1000000" | bc)"
   elif (( n >= 1000 ));    then printf "%.1fk" "$(echo "scale=1; $n/1000" | bc)"
   else printf "%d" "$n"; fi
@@ -298,11 +298,15 @@ SETUPEOF
     # Skip update if a TUI app (like Claude CLI) is the foreground process.
     # Writing scroll regions while a TUI is active causes flickering,
     # lost input, and broken rendering.
+    lines=${LINES:-$(tput lines 2>/dev/null || echo 24)}
+
     if [[ -n "${CCBAR_TTY:-}" ]]; then
       fg_cmd=$(ps -o stat=,comm= -t "${CCBAR_TTY#/dev/}" 2>/dev/null | awk '/^S\+/ || /^\+/ {print $NF}' | head -1)
       case "$fg_cmd" in
         *claude*|*vim*|*nvim*|*less*|*man*|*top*|*htop*)
-          # TUI is active — update terminal title as fallback instead
+          # TUI is active — re-apply scroll region so it survives Claude's terminal takeover,
+          # then update title as fallback. Do not move cursor or render header content.
+          printf '\e[3;%dr' "$lines"
           buf=$(get_status_lines 2>/dev/null)
           clean=$(printf '%s' "$buf" | sed 's/\x1b\[[0-9;]*m//g' | tr '\n' ' ' | sed 's/  */ /g')
           printf '\e]0;ccbar │ %s\a' "$clean"
@@ -314,9 +318,13 @@ SETUPEOF
     # Buffer output FIRST (Python is slow), then write atomically
     # to minimize cursor displacement time and avoid eating user input
     buf=$(get_status_lines 2>/dev/null)
-    lines=${LINES:-$(tput lines 2>/dev/null || echo 24)}
-    # Single atomic write: save cursor, re-apply scroll region, draw, restore
-    printf '\e7\e[3;%dr\e[1;1H\e[K%s\e[K\e8' "$lines" "$buf"
+    if [[ -n "$buf" ]]; then
+      # Single atomic write: save cursor, re-apply scroll region, draw, restore
+      printf '\e7\e[3;%dr\e[1;1H\e[K%s\e[K\e8' "$lines" "$buf"
+    else
+      # Python failed silently — preserve existing header, just re-apply scroll region
+      printf '\e[3;%dr' "$lines"
+    fi
     ;;
 
   title)

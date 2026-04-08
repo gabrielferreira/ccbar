@@ -63,8 +63,17 @@ Live Claude Code metrics in your terminal. Track token usage, costs, plan limits
 
 ## Installation
 
+### Homebrew (recommended)
+
 ```bash
-git clone https://github.com/<your-user>/ccbar.git ~/.config/ccbar && ln -sf ~/.config/ccbar/ccbar ~/.local/bin/ccbar
+brew tap gabrielferreira/ccbar
+brew install ccbar
+```
+
+### Manual
+
+```bash
+git clone https://github.com/gabrielferreira/ccbar.git ~/.config/ccbar && ln -sf ~/.config/ccbar/ccbar ~/.local/bin/ccbar
 ```
 
 Add to your `~/.bashrc` or `~/.zshrc`:
@@ -102,7 +111,7 @@ ccbar bar
 
 Each terminal tracks its **own project** — if you have 3 terminals on different projects, each bar shows that project's data.
 
-When a TUI app like Claude Code CLI is detected in the foreground, the bar automatically pauses scroll region updates and falls back to updating the terminal title instead — no flickering or lost input.
+When a TUI app like Claude Code CLI is detected in the foreground, the bar automatically pauses scroll region updates and falls back to updating the terminal title instead — no flickering or lost input. If metric parsing fails temporarily (e.g., during a long session with heavy JSONL files), the bar preserves the last rendered content instead of going blank.
 
 ### Title mode
 
@@ -123,6 +132,8 @@ ccbar dashboard
 - In **cmux**: opens in a new tab
 - In **tmux**: opens in a new window
 - **Standalone**: runs in the current terminal
+
+The dashboard adapts to your terminal size — content is distributed vertically to fill available space. Resizing the window triggers an immediate redraw.
 
 ### Stop
 
@@ -341,6 +352,18 @@ ccbar bar  # uses ~/.claude-pessoal/projects/
 - ccbar uses `$PWD` to find the project. Ensure your terminal is in the project directory
 - Override with: `CLAUDE_PROJECT=/path/to/project ccbar bar`
 - Check project exists: `ls ~/.claude/projects/` (paths are encoded with `-` replacing `/`)
+
+### `printf: X.X: invalid number` errors
+
+Token counts in some JSONL files are stored as floats (`44000.0` instead of `44000`). This was fixed in [v1.0.0](https://github.com/gabrielferreira/ccbar/releases/tag/v1.0.0). Update your installation:
+
+```bash
+# Homebrew
+brew upgrade ccbar
+
+# Manual
+cd ~/.config/ccbar && git pull
+```
 
 ### python3 / bc not found
 

@@ -27,7 +27,7 @@ color_pct() {
 }
 
 fmt_tokens() {
-  local n=$1
+  local n=${1%%.*}  # strip decimal part (tokens can come as floats from JSON)
   if   (( n >= 1000000 )); then printf "%.1fM" "$(echo "scale=1; $n/1000000" | bc)"
   elif (( n >= 1000 ));    then printf "%.1fk" "$(echo "scale=1; $n/1000" | bc)"
   else                          printf "%d" "$n"
@@ -98,6 +98,9 @@ project_dir="$CLAUDE_DIR/$project_encoded"
 
 tput civis 2>/dev/null
 trap 'tput cnorm 2>/dev/null; exit' INT TERM
+trap 'kill "$_sleep_pid" 2>/dev/null; _sleep_pid=0' WINCH
+
+_sleep_pid=0
 
 while true; do
   # ── Find session file ──
@@ -231,6 +234,37 @@ print(f'proj_count={len(pitems)}')
   # ── Render ──
   clear
   cols=$(tput cols 2>/dev/null || echo 80)
+  rows=$(tput lines 2>/dev/null || echo 24)
+
+  # ── Count content lines (dynamic sections) ──
+  _lines=0
+  _lines=$(( _lines + 2 ))  # header title + hline
+  _lines=$(( _lines + 2 ))  # SESSION label + blank
+  _lines=$(( _lines + 4 ))  # 3 token rows + blank echo
+  _lines=$(( _lines + 2 ))  # turns/tools row + blank
+  if (( tool_count > 0 )); then
+    _lines=$(( _lines + 1 + tool_count + 1 ))
+  fi
+  if (( plimit > 0 )); then
+    _lines=$(( _lines + 1 + 2 + 4 + 1 ))          # hline + PLAN header+blank + 4 bars + trailing blank
+    (( w_pct >= 80 )) && _lines=$(( _lines + 2 )) # warning: \n + text line
+  fi
+  _lines=$(( _lines + 1 + 2 + 2 + 1 ))            # hline + TODAY header+blank + 2 data rows + blank
+  if (( proj_count > 0 )); then
+    _lines=$(( _lines + 1 + proj_count + 1 ))
+  fi
+  _lines=$(( _lines + 2 ))  # footer hline + status line
+
+  # ── Vertical padding ──
+  _top=0; _bot=0
+  if (( _lines < rows )); then
+    _spare=$(( rows - _lines ))
+    _top=$(( _spare / 4 ))
+    _bot=$(( _spare - _top ))
+  fi
+
+  # Top padding
+  for (( _p=0; _p<_top; _p++ )); do echo ""; done
 
   # Header
   printf "${BOLD}${WHITE}  󰚩 ccbar dashboard${R}"
@@ -331,5 +365,11 @@ print(f'proj_count={len(pitems)}')
   hline "$cols"
   printf "${DIM}  refresh: ${INTERVAL}s │ plan: ${CLAUDE_PLAN:-pro} │ project: $(basename "$PROJECT")${R}\n"
 
-  sleep "$INTERVAL"
+  # Bottom padding — fill remaining terminal height
+  for (( _p=0; _p<_bot; _p++ )); do echo ""; done
+
+  # Interruptible sleep: SIGWINCH will kill $_sleep_pid and trigger immediate redraw
+  sleep "$INTERVAL" & _sleep_pid=$!
+  wait "$_sleep_pid" 2>/dev/null || true
+  _sleep_pid=0
 done
