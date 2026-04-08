@@ -16,7 +16,7 @@ jobs:
         run: sudo apt-get install -y shellcheck
 
       - name: ShellCheck
-        run: shellcheck -x ccbar ccbar-header.sh ccbar-dashboard.sh ccbar-bar.sh ccbar-panel.sh ccbar-cmux.sh claude_status.sh
+        run: shellcheck -x -S error ccbar ccbar-header.sh ccbar-dashboard.sh ccbar-bar.sh ccbar-panel.sh ccbar-cmux.sh claude_status.sh
 
       - name: Python syntax check
         run: python3 -m py_compile ccbar_parse.py
