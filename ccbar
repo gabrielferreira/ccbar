@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# ccbar — launcher for Claude Code status bar
+#
+# Usage:
+#   ccbar bar         Start top bar on current terminal (split)
+#   ccbar dashboard   Open dashboard in a new tab
+#   ccbar stop        Stop all ccbar processes for this surface
+#   ccbar stop-all    Stop all ccbar processes
+
+set -euo pipefail
+
+# Resolve symlinks to find the real script directory
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+  DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+CMD="${1:-help}"
+SURFACE="${CMUX_SURFACE_ID:-}"
+
+# Ensure CLAUDE_PLAN is set (from env, or read from cmux, or default)
+if [[ -z "${CLAUDE_PLAN:-}" ]]; then
+  CLAUDE_PLAN=$(cmux display-message -p '#{CLAUDE_PLAN}' 2>/dev/null || true)
+fi
+CLAUDE_PLAN="${CLAUDE_PLAN:-pro}"
+export CLAUDE_PLAN
+
+case "$CMD" in
+  bar)
+    # Setup scroll region and start background updater in THIS terminal
+    eval "$("$SCRIPT_DIR/ccbar-header.sh" setup)"
+    CLAUDE_PLAN="$CLAUDE_PLAN" CLAUDE_PROJECT="${CLAUDE_PROJECT:-$PWD}" \
+      "$SCRIPT_DIR/ccbar-header.sh" update
+    # Background loop
+    (
+      while true; do
+        sleep "${2:-10}"
+        CLAUDE_PLAN="$CLAUDE_PLAN" CLAUDE_PROJECT="${CLAUDE_PROJECT:-$PWD}" \
+          "$SCRIPT_DIR/ccbar-header.sh" update
+      done
+    ) &>/dev/null &
+    disown
+    echo "ccbar: header started (refreshing every ${2:-10}s)"
+    ;;
+
+  dashboard|dash)
+    project_path="$(cd "${CLAUDE_PROJECT:-$PWD}" 2>/dev/null && pwd || echo "$PWD")"
+
+    if [[ -n "${CMUX_SURFACE_ID:-}" ]]; then
+      # cmux: open in new tab
+      result=$(cmux new-surface 2>&1)
+      new_surface=$(echo "$result" | grep -oE 'surface:[0-9]+')
+      if [[ -z "$new_surface" ]]; then
+        echo "ccbar: failed to create tab: $result" >&2; exit 1
+      fi
+      cmux rename-tab --surface "$new_surface" "ccbar dashboard" 2>/dev/null || true
+      cmux send --surface "$new_surface" "export CLAUDE_PLAN='${CLAUDE_PLAN}' CLAUDE_PROJECT='${project_path}' && '${SCRIPT_DIR}/ccbar-dashboard.sh' 10"$'\r' 2>/dev/null
+      echo "ccbar: dashboard opened on $new_surface (plan=${CLAUDE_PLAN}, project=$(basename "$project_path"))"
+
+    elif [[ -n "${TMUX:-}" ]]; then
+      # tmux: open in new window
+      tmux new-window -n "ccbar dashboard" \
+        "CLAUDE_PLAN='${CLAUDE_PLAN}' CLAUDE_PROJECT='${project_path}' '${SCRIPT_DIR}/ccbar-dashboard.sh' 10"
+      echo "ccbar: dashboard opened in new tmux window (plan=${CLAUDE_PLAN}, project=$(basename "$project_path"))"
+
+    else
+      # standalone: run in current terminal
+      echo "ccbar: starting dashboard (plan=${CLAUDE_PLAN}, project=$(basename "$project_path"))"
+      CLAUDE_PLAN="$CLAUDE_PLAN" CLAUDE_PROJECT="$project_path" \
+        exec "$SCRIPT_DIR/ccbar-dashboard.sh" 10
+    fi
+    ;;
+
+  stop)
+    if [[ -n "$SURFACE" ]]; then
+      pkill -f "ccbar.*${SURFACE}" 2>/dev/null && echo "ccbar: stopped for this surface" || echo "ccbar: nothing running"
+    else
+      killed=0
+      pkill -f "ccbar-header.sh" 2>/dev/null && killed=1
+      pkill -f "ccbar-dashboard.sh" 2>/dev/null && killed=1
+      (( killed )) && echo "ccbar: stopped" || echo "ccbar: nothing running"
+    fi
+    ;;
+
+  stop-all)
+    pkill -f "ccbar-bar.sh\|ccbar-dashboard.sh\|ccbar-cmux.sh\|ccbar-panel.sh" 2>/dev/null && echo "ccbar: all stopped" || echo "ccbar: nothing running"
+    ;;
+
+  help|*)
+    echo "Usage: ccbar <bar|dashboard|stop|stop-all>"
+    echo ""
+    echo "  bar        — top bar on current terminal"
+    echo "  dashboard  — full dashboard in a new tab"
+    echo "  stop       — stop ccbar for this terminal"
+    echo "  stop-all   — stop all ccbar processes"
+    ;;
+esac

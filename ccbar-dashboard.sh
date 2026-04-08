@@ -1,0 +1,293 @@
+#!/usr/bin/env bash
+# ccbar-dashboard.sh — Full dashboard for Claude Code usage
+# Usage: ~/.config/ccbar/ccbar-dashboard.sh [interval_seconds]
+# Designed to run in a dedicated cmux tab.
+
+set -euo pipefail
+
+INTERVAL="${1:-10}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude/projects}"
+PROJECT="${CLAUDE_PROJECT:-$PWD}"
+
+# ── ANSI ──
+R='\033[0m'; BOLD='\033[1m'; DIM='\033[2m'; ITALIC='\033[3m'
+RED='\033[38;5;196m'; GREEN='\033[38;5;82m'; YELLOW='\033[38;5;226m'
+BLUE='\033[38;5;39m'; CYAN='\033[38;5;51m'; GREY='\033[38;5;245m'
+ORANGE='\033[38;5;208m'; WHITE='\033[38;5;255m'; MAGENTA='\033[38;5;213m'
+BG_GREY='\033[48;5;236m'
+
+# ── Helpers ──
+color_pct() {
+  local pct=$1
+  if   (( pct >= 80 )); then printf '%b' "$RED"
+  elif (( pct >= 50 )); then printf '%b' "$YELLOW"
+  else                       printf '%b' "$GREEN"
+  fi
+}
+
+fmt_tokens() {
+  local n=$1
+  if   (( n >= 1000000 )); then printf "%.1fM" "$(echo "scale=1; $n/1000000" | bc)"
+  elif (( n >= 1000 ));    then printf "%.1fk" "$(echo "scale=1; $n/1000" | bc)"
+  else                          printf "%d" "$n"
+  fi
+}
+
+bar() {
+  local pct=$1 len=${2:-30} char_fill=${3:-█} char_empty=${4:-░}
+  local filled=$(( pct * len / 100 ))
+  (( filled > len )) && filled=$len
+  local b=""
+  for (( i=0; i<len; i++ )); do
+    if (( i < filled )); then b+="$char_fill"; else b+="$char_empty"; fi
+  done
+  printf '%s' "$b"
+}
+
+hline() {
+  local len=${1:-60}
+  printf '%b' "$GREY"
+  printf '%.0s─' $(seq 1 "$len")
+  printf '%b\n' "$R"
+}
+
+plan_limit() {
+  case "${CLAUDE_PLAN:-pro}" in
+    pro)       echo 44000 ;;
+    max5)      echo 88000 ;;
+    max20)     echo 220000 ;;
+    team)      echo 55000 ;;
+    team-prem) echo 275000 ;;
+    api)       echo 0 ;;
+    *)         echo 44000 ;;
+  esac
+}
+
+plan_name() {
+  case "${CLAUDE_PLAN:-pro}" in
+    pro)       echo "Pro" ;;
+    max5)      echo "Max (5x)" ;;
+    max20)     echo "Max (20x)" ;;
+    team)      echo "Team" ;;
+    team-prem) echo "Team Premium" ;;
+    api)       echo "API" ;;
+    *)         echo "Pro" ;;
+  esac
+}
+
+calc_cost() {
+  local tin=$1 tout=$2 tcw=$3 tcr=$4 model=${5:-sonnet}
+  python3 -c "
+tin,tout,tcw,tcr = $tin,$tout,$tcw,$tcr
+prices = {
+  'opus':   (15.00, 75.00, 18.75, 1.50),
+  'haiku':  (0.80,  4.00,  1.00,  0.08),
+  'sonnet': (3.00,  15.00, 3.75,  0.30),
+}
+m = 'opus' if 'opus' in '$model' else 'haiku' if 'haiku' in '$model' else 'sonnet'
+pi,po,pcw,pcr = prices[m]
+cost = (tin*pi + tout*po + tcw*pcw + tcr*pcr) / 1_000_000
+print(f'{cost:.2f}')
+"
+}
+
+# ── Resolve project session dir ──
+project_encoded=$(echo "$PROJECT" | sed 's|[/.]|-|g')
+project_dir="$CLAUDE_DIR/$project_encoded"
+
+tput civis 2>/dev/null
+trap 'tput cnorm 2>/dev/null; exit' INT TERM
+
+while true; do
+  # ── Find session file ──
+  file=""
+  if [[ -d "$project_dir" ]]; then
+    file=$(find "$project_dir" -maxdepth 2 -name "*.jsonl" -not -path "*/subagents/*" 2>/dev/null | xargs ls -t 2>/dev/null | head -1)
+  fi
+
+  # ── Parse data ──
+  if [[ -n "$file" ]]; then
+    data=$(python3 "$SCRIPT_DIR/ccbar_parse.py" --session "$file" --daily "$CLAUDE_DIR" 2>/dev/null)
+  else
+    data=$(python3 "$SCRIPT_DIR/ccbar_parse.py" --daily "$CLAUDE_DIR" 2>/dev/null)
+  fi
+
+  # ── Extract fields via Python ──
+  eval "$(python3 -c "
+import json, sys
+d = json.loads('''$data''') if '''$data''' else {}
+s = d.get('session', {})
+dl = d.get('daily', {})
+dt = dl.get('total', {})
+projects = dl.get('projects', {})
+
+# Session
+print(f's_tin={s.get(\"input_tokens\", 0)}')
+print(f's_tout={s.get(\"output_tokens\", 0)}')
+print(f's_tcw={s.get(\"cache_write_tokens\", 0)}')
+print(f's_tcr={s.get(\"cache_read_tokens\", 0)}')
+print(f's_ctx={s.get(\"context_total\", 0)}')
+print(f's_turns_u={s.get(\"turns_user\", 0)}')
+print(f's_turns_a={s.get(\"turns_assistant\", 0)}')
+print(f's_tools={s.get(\"tool_calls_total\", 0)}')
+print(f's_errors={s.get(\"tool_errors\", 0)}')
+print(f's_model=\"{s.get(\"primary_model\", \"unknown\")}\"')
+print(f's_dur=\"{s.get(\"duration_fmt\", \"0m\")}\"')
+print(f's_dur_sec={s.get(\"duration_sec\", 0)}')
+print(f's_cache_pct={s.get(\"cache_hit_pct\", 0)}')
+print(f's_cache_save={s.get(\"cache_savings_usd\", 0)}')
+
+# Tool breakdown (top 6)
+tc = s.get('tool_calls', {})
+items = sorted(tc.items(), key=lambda x: -x[1])[:6]
+for i, (name, count) in enumerate(items):
+    print(f'tool_{i}_name=\"{name}\"')
+    print(f'tool_{i}_count={count}')
+print(f'tool_count={len(items)}')
+
+# Daily total
+print(f'd_tin={dt.get(\"input_tokens\", 0)}')
+print(f'd_tout={dt.get(\"output_tokens\", 0)}')
+print(f'd_tcw={dt.get(\"cache_write_tokens\", 0)}')
+print(f'd_tcr={dt.get(\"cache_read_tokens\", 0)}')
+print(f'd_sessions={dt.get(\"sessions\", 0)}')
+print(f'd_tools={dt.get(\"tool_calls\", 0)}')
+
+# Per-project breakdown (top 5)
+pitems = sorted(projects.items(), key=lambda x: -(x[1]['output_tokens']+x[1]['input_tokens']))[:5]
+for i, (name, info) in enumerate(pitems):
+    short = name.split('-')[-1] if len(name) > 20 else name
+    # Try to make a readable name from the encoded path
+    parts = name.lstrip('-').split('-')
+    short = parts[-1] if parts else name
+    if len(short) < 3 and len(parts) > 1:
+        short = '-'.join(parts[-2:])
+    total_t = info['input_tokens'] + info['output_tokens'] + info['cache_write_tokens'] + info['cache_read_tokens']
+    print(f'proj_{i}_name=\"{short}\"')
+    print(f'proj_{i}_sessions={info[\"sessions\"]}')
+    print(f'proj_{i}_tin={info[\"input_tokens\"]}')
+    print(f'proj_{i}_tout={info[\"output_tokens\"]}')
+    print(f'proj_{i}_tcw={info[\"cache_write_tokens\"]}')
+    print(f'proj_{i}_tcr={info[\"cache_read_tokens\"]}')
+    print(f'proj_{i}_tools={info[\"tool_calls\"]}')
+print(f'proj_count={len(pitems)}')
+" 2>/dev/null)"
+
+  plimit=$(plan_limit)
+  pname=$(plan_name)
+
+  # ── Costs ──
+  s_cost=$(calc_cost "$s_tin" "$s_tout" "$s_tcw" "$s_tcr" "$s_model")
+  d_ctx=$(( d_tin + d_tcw + d_tcr ))
+  d_cost=$(calc_cost "$d_tin" "$d_tout" "$d_tcw" "$d_tcr" "sonnet")
+
+  # ── Percentages ──
+  s_pct=0; d_pct=0
+  if (( plimit > 0 )); then
+    s_pct=$(( s_ctx * 100 / plimit ))
+    d_pct=$(( d_ctx * 100 / plimit ))
+  fi
+
+  # ── ETA ──
+  eta=""
+  if (( plimit > 0 && s_ctx > 0 && s_dur_sec > 60 )); then
+    mins=$(( s_dur_sec / 60 ))
+    if (( s_ctx < plimit )); then
+      rem=$(( (plimit - s_ctx) * mins / s_ctx ))
+      if (( rem >= 60 )); then eta="~$(( rem / 60 ))h$(printf '%02d' $(( rem % 60 )))m"
+      else eta="~${rem}m"; fi
+    else
+      eta="exceeded"
+    fi
+  fi
+
+  # ── Render ──
+  clear
+  cols=$(tput cols 2>/dev/null || echo 80)
+
+  # Header
+  printf "${BOLD}${WHITE}  󰚩 ccbar dashboard${R}"
+  printf "${GREY}%*s${R}\n" $(( cols - 20 )) "$(date '+%H:%M:%S')"
+  hline "$cols"
+
+  # ═══ SESSION ═══
+  printf "${BOLD}${BLUE}  SESSION${R}  ${DIM}${s_model}${R}  ${GREY}${s_dur}${R}"
+  if [[ -n "$eta" ]]; then printf "  ${ORANGE}${eta} left${R}"; fi
+  printf "\n\n"
+
+  # Tokens
+  printf "  ${DIM}input${R}    %10s   ${DIM}output${R}  %10s\n" "$(fmt_tokens $s_tin)" "$(fmt_tokens $s_tout)"
+  printf "  ${DIM}cache w${R}  %10s   ${DIM}cache r${R}  %10s\n" "$(fmt_tokens $s_tcw)" "$(fmt_tokens $s_tcr)"
+  printf "  ${DIM}total${R}    %10s   ${DIM}cost${R}    ${YELLOW}\$${s_cost}${R}\n" "$(fmt_tokens $s_ctx)"
+  echo ""
+
+  # Turns & tools
+  printf "  ${DIM}turns${R}  ${WHITE}${s_turns_u}${R}${GREY}→${R}${WHITE}${s_turns_a}${R}"
+  printf "   ${DIM}tools${R}  ${WHITE}${s_tools}${R}"
+  if (( s_errors > 0 )); then printf "  ${RED}${s_errors} errors${R}"; fi
+  printf "   ${DIM}cache hit${R}  ${GREEN}${s_cache_pct}%%${R}"
+  if (( $(echo "$s_cache_save > 0" | bc -l) )); then
+    printf "  ${DIM}saved${R} ${GREEN}\$${s_cache_save}${R}"
+  fi
+  printf "\n\n"
+
+  # Tool breakdown
+  if (( tool_count > 0 )); then
+    printf "  ${DIM}tools breakdown${R}\n"
+    for (( i=0; i<tool_count; i++ )); do
+      eval "tn=\$tool_${i}_name; tc=\$tool_${i}_count"
+      # Mini bar proportional to max
+      if (( i == 0 )); then max_tc=$tc; fi
+      blen=$(( tc * 20 / (max_tc > 0 ? max_tc : 1) ))
+      (( blen < 1 )) && blen=1
+      printf "  ${CYAN}%-10s${R} %4d " "$tn" "$tc"
+      printf "${BLUE}"
+      printf '%.0s▪' $(seq 1 "$blen")
+      printf "${R}\n"
+    done
+    echo ""
+  fi
+
+  # ═══ PLAN LIMIT ═══
+  if (( plimit > 0 )); then
+    hline "$cols"
+    printf "${BOLD}${ORANGE}  PLAN${R}  ${DIM}${pname} — $(fmt_tokens $plimit) tokens / 5h window${R}\n\n"
+
+    sc=$(color_pct "$s_pct")
+    dc=$(color_pct "$d_pct")
+
+    printf "  ${DIM}session${R}  ${sc}$(bar $s_pct 35)${R} ${sc}%3d%%${R}  $(fmt_tokens $s_ctx)\n" "$s_pct"
+    printf "  ${DIM}today  ${R}  ${dc}$(bar $d_pct 35)${R} ${dc}%3d%%${R}  $(fmt_tokens $d_ctx)\n" "$d_pct"
+
+    if (( s_pct >= 100 || d_pct >= 100 )); then
+      printf "\n  ${RED}${BOLD}⚠  LIMIT EXCEEDED${R}${RED} — consider waiting for the next 5h window${R}\n"
+    elif (( s_pct >= 80 || d_pct >= 80 )); then
+      printf "\n  ${YELLOW}⚠  Approaching limit${R}\n"
+    fi
+    echo ""
+  fi
+
+  # ═══ DAILY ═══
+  hline "$cols"
+  printf "${BOLD}${MAGENTA}  TODAY${R}  ${DIM}${d_sessions} sessions — $(fmt_tokens $d_ctx) total tokens${R}\n\n"
+
+  printf "  ${DIM}input${R}    %10s   ${DIM}output${R}  %10s   ${DIM}cost${R}  ${YELLOW}\$${d_cost}${R}\n" "$(fmt_tokens $d_tin)" "$(fmt_tokens $d_tout)"
+  printf "  ${DIM}tools${R}    %10d\n" "$d_tools"
+  echo ""
+
+  # Per-project breakdown
+  if (( proj_count > 0 )); then
+    printf "  ${DIM}%-20s %6s %8s %8s %6s${R}\n" "project" "sess" "input" "output" "tools"
+    for (( i=0; i<proj_count; i++ )); do
+      eval "pn=\$proj_${i}_name; ps=\$proj_${i}_sessions; ptin=\$proj_${i}_tin; ptout=\$proj_${i}_tout; pt=\$proj_${i}_tools"
+      printf "  ${WHITE}%-20s${R} %4d  %8s %8s %6d\n" "$pn" "$ps" "$(fmt_tokens $ptin)" "$(fmt_tokens $ptout)" "$pt"
+    done
+    echo ""
+  fi
+
+  hline "$cols"
+  printf "${DIM}  refresh: ${INTERVAL}s │ plan: ${CLAUDE_PLAN:-pro} │ project: $(basename "$PROJECT")${R}\n"
+
+  sleep "$INTERVAL"
+done
