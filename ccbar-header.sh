@@ -301,15 +301,18 @@ SETUPEOF
     lines=${LINES:-$(tput lines 2>/dev/null || echo 24)}
 
     if [[ -n "${CCBAR_TTY:-}" ]]; then
-      fg_cmd=$(ps -o stat=,comm= -t "${CCBAR_TTY#/dev/}" 2>/dev/null | awk '/^S\+/ || /^\+/ {print $NF}' | head -1)
-      case "$fg_cmd" in
-        *claude*|*vim*|*nvim*|*less*|*man*|*top*|*htop*)
-          # TUI is active — re-apply scroll region so it survives Claude's terminal takeover,
-          # then update title as fallback. Do not move cursor or render header content.
-          printf '\e[3;%dr' "$lines"
+      tty_short="${CCBAR_TTY#/dev/}"
+      fg_cmd=$(ps -o stat=,comm= -t "$tty_short" 2>/dev/null \
+        | awk 'index($1,"+")>0 {print $2}' | head -1)
+      case "${fg_cmd:-}" in
+        bash|zsh|fish|sh|dash|ksh|tcsh|"")
+          # Shell is foreground — safe to render bar
+          ;;
+        *)
+          # Non-shell foreground (TUI app) — skip ALL cursor/scroll writes
           buf=$(get_status_lines 2>/dev/null)
           clean=$(printf '%s' "$buf" | sed 's/\x1b\[[0-9;]*m//g' | tr '\n' ' ' | sed 's/  */ /g')
-          printf '\e]0;ccbar │ %s\a' "$clean"
+          printf '\e]0;ccbar │ %s\a' "$clean" > "${CCBAR_TTY}"
           exit 0
           ;;
       esac
