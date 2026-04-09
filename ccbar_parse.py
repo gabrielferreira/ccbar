@@ -333,7 +333,8 @@ def parse_window(base_dir, hours=5):
         count += 1
 
     total["sessions"] = count
-    total["base_pct"] = base_pct
+    # Only carry base_pct if the manual reset belongs to the current window
+    total["base_pct"] = base_pct if (manual_reset and manual_reset > window_start) else 0
 
     return total
 

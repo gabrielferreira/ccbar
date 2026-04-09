@@ -33,8 +33,8 @@ fmt_t() {
 
 plan_limit() {
   case "${CLAUDE_PLAN:-pro}" in
-    pro) echo 44000;; max5) echo 88000;; max20) echo 220000;;
-    team) echo 55000;; team-prem) echo 275000;; api) echo 0;; *) echo 44000;;
+    pro) echo 200000;; max5) echo 400000;; max20) echo 900000;;
+    team) echo 250000;; team-prem) echo 1300000;; api) echo 0;; *) echo 200000;;
   esac
 }
 
@@ -54,11 +54,14 @@ get_status_lines() {
     return
   fi
 
-  eval "$(python3 - "$file" "$project_dir" "$CLAUDE_DIR" <<'PYEOF'
+  eval "$(python3 - "$file" "$project_dir" "$CLAUDE_DIR" "$SCRIPT_DIR" <<'PYEOF'
 import json, sys, os
 from datetime import datetime, timezone
 
 session_file, proj_dir, base = sys.argv[1], sys.argv[2], sys.argv[3]
+script_dir = sys.argv[4]
+sys.path.insert(0, script_dir)
+from ccbar_parse import parse_window
 
 def sum_tokens(filepath):
     ti=to=cw=cr=tu=tl=er=0
@@ -123,43 +126,6 @@ def daily_sum(directory):
             except: pass
     return ti,to,cw,cr,sess
 
-def window_sum(directory, hours=5):
-    from datetime import timedelta
-    cutoff=datetime.now(timezone.utc)-timedelta(hours=hours)
-    cutoff_ts=cutoff.timestamp()
-    ti=to=cw=cr=sess=0
-    for root,dirs,files in os.walk(directory):
-        dirs[:]=[d for d in dirs if d!="subagents"]
-        for fn in files:
-            if not fn.endswith(".jsonl"): continue
-            fp=os.path.join(root,fn)
-            if os.path.getmtime(fp)<cutoff_ts: continue
-            fti=fto=fcw=fcr=0; has=False
-            try:
-                with open(fp) as fh:
-                    for l in fh:
-                        l=l.strip()
-                        if not l: continue
-                        try: o=json.loads(l)
-                        except: continue
-                        ts=o.get("timestamp")
-                        if not ts: continue
-                        try: mt=datetime.fromisoformat(ts.replace("Z","+00:00"))
-                        except: continue
-                        if mt<cutoff: continue
-                        has=True
-                        msg=o.get("message",{})
-                        if not isinstance(msg,dict): continue
-                        u=msg.get("usage") if msg.get("role")=="assistant" else None
-                        if u is None and msg.get("role")=="assistant": u=o.get("usage")
-                        if not isinstance(u,dict): continue
-                        fti+=u.get("input_tokens",0);fto+=u.get("output_tokens",0)
-                        fcw+=u.get("cache_creation_input_tokens",0);fcr+=u.get("cache_read_input_tokens",0)
-            except: pass
-            if has:
-                ti+=fti;to+=fto;cw+=fcw;cr+=fcr;sess+=1
-    return ti,to,cw,cr,sess
-
 # 1. This session
 tin,tout,tcw,tcr,turns,tools,errors,timestamps,model=sum_tokens(session_file)
 dur_s=0
@@ -184,25 +150,18 @@ dtin,dtout,dtcw,dtcr,dsess=daily_sum(base)
 dctx=dtin+dtcw+dtcr
 dcost=(dtin*3+dtout*15+dtcw*3.75+dtcr*0.3)/1e6
 
-# 4. 5h rolling window
-wtin,wtout,wtcw,wtcr,wsess=window_sum(base)
-wctx=wtin+wtcw+wtcr
+# 4. 5h window (gap-detected, hour-aligned via parse_window)
+wdata=parse_window(base)
+wtin=wdata["input_tokens"];wtout=wdata["output_tokens"]
+wtcw=wdata["cache_write_tokens"];wtcr=wdata["cache_read_tokens"]
+wsess=wdata["sessions"];_bp=wdata.get("base_pct",0)
+wctx=wtin+wtcw  # cache reads excluded — re-reads inflate count without new compute
 
 print(f'ctx={ctx};tin={tin};tout={tout};dur="{dur}";mins={mins}')
 print(f'turns={turns};tools={tools};errors={errors};cost="{scost:.2f}";cache_pct="{cache_pct}"')
 print(f'ptin={ptin};ptout={ptout};pctx={pctx};psess={psess};pcost="{pcost:.2f}"')
 print(f'dtin={dtin};dtout={dtout};dctx={dctx};dsess={dsess};dcost="{dcost:.2f}"')
 print(f'wctx={wctx};wsess={wsess}')
-
-# 5. Manual reset base %
-import os as _os
-_rf=_os.path.join(_os.path.dirname(base.rstrip("/")),"ccbar_reset")
-_bp=0
-if _os.path.exists(_rf):
-    try:
-        _lines=open(_rf).read().strip().split("\n")
-        if len(_lines)>1: _bp=int(_lines[1].strip())
-    except: pass
 print(f'w_base_pct={_bp}')
 PYEOF
   )" 2>/dev/null

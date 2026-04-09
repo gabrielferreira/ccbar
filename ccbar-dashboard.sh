@@ -54,11 +54,11 @@ hline() {
 
 plan_limit() {
   case "${CLAUDE_PLAN:-pro}" in
-    pro)       echo 44000 ;;
-    max5)      echo 88000 ;;
-    max20)     echo 220000 ;;
-    team)      echo 55000 ;;
-    team-prem) echo 275000 ;;
+    pro)       echo 200000 ;;
+    max5)      echo 400000 ;;
+    max20)     echo 900000 ;;
+    team)      echo 250000 ;;
+    team-prem) echo 1300000 ;;
     api)       echo 0 ;;
     *)         echo 44000 ;;
   esac
@@ -206,7 +206,7 @@ print(f'proj_count={len(pitems)}')
   s_cost=$(calc_cost "$s_tin" "$s_tout" "$s_tcw" "$s_tcr" "$s_model")
   d_ctx=$(( d_tin + d_tcw + d_tcr ))
   d_cost=$(calc_cost "$d_tin" "$d_tout" "$d_tcw" "$d_tcr" "sonnet")
-  w_ctx=$(( w_tin + w_tcw + w_tcr ))
+  w_ctx=$(( w_tin + w_tcw ))  # cache reads excluded — re-reads inflate count without new compute
   cp_ctx=$(( cp_tin + cp_tcw + cp_tcr ))
 
   # ── Percentages ──
