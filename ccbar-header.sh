@@ -134,6 +134,7 @@ h,m=dur_s//3600,(dur_s%3600)//60
 dur=f"{h}h{m:02d}m" if h>0 else f"{m}m"
 mins=max(1,dur_s//60) if dur_s>0 else 0
 ctx=tin+tcw+tcr
+splan=tin+tcw  # plan usage: no cache reads
 cache_pct=round(tcr*100/ctx,1) if ctx>0 else 0
 prices={"opus":(15,75,18.75,1.5),"haiku":(0.8,4,1,0.08)}
 k="opus" if "opus" in model else "haiku" if "haiku" in model else "sonnet"
@@ -143,11 +144,13 @@ scost=(tin*pi+tout*po+tcw*pw+tcr*pr)/1e6
 # 2. This project today
 ptin,ptout,ptcw,ptcr,psess=daily_sum(proj_dir)
 pctx=ptin+ptcw+ptcr
+pplan=ptin+ptcw  # plan usage: no cache reads
 pcost=(ptin*3+ptout*15+ptcw*3.75+ptcr*0.3)/1e6
 
 # 3. All projects today
 dtin,dtout,dtcw,dtcr,dsess=daily_sum(base)
 dctx=dtin+dtcw+dtcr
+dplan=dtin+dtcw  # plan usage: no cache reads
 dcost=(dtin*3+dtout*15+dtcw*3.75+dtcr*0.3)/1e6
 
 # 4. 5h window (gap-detected, hour-aligned via parse_window)
@@ -157,10 +160,10 @@ wtcw=wdata["cache_write_tokens"];wtcr=wdata["cache_read_tokens"]
 wsess=wdata["sessions"];_bp=wdata.get("base_pct",0)
 wctx=wtin+wtcw  # cache reads excluded — re-reads inflate count without new compute
 
-print(f'ctx={ctx};tin={tin};tout={tout};dur="{dur}";mins={mins}')
+print(f'ctx={ctx};splan={splan};tin={tin};tout={tout};dur="{dur}";mins={mins}')
 print(f'turns={turns};tools={tools};errors={errors};cost="{scost:.2f}";cache_pct="{cache_pct}"')
-print(f'ptin={ptin};ptout={ptout};pctx={pctx};psess={psess};pcost="{pcost:.2f}"')
-print(f'dtin={dtin};dtout={dtout};dctx={dctx};dsess={dsess};dcost="{dcost:.2f}"')
+print(f'ptin={ptin};ptout={ptout};pctx={pctx};pplan={pplan};psess={psess};pcost="{pcost:.2f}"')
+print(f'dtin={dtin};dtout={dtout};dctx={dctx};dplan={dplan};dsess={dsess};dcost="{dcost:.2f}"')
 print(f'wctx={wctx};wsess={wsess}')
 print(f'w_base_pct={_bp}')
 PYEOF
@@ -169,10 +172,10 @@ PYEOF
   local plimit pct eta
   plimit=$(plan_limit)
   pct=0; eta=""
-  if (( plimit > 0 && ctx > 0 )); then
-    pct=$(( ctx * 100 / plimit ))
+  if (( plimit > 0 && splan > 0 )); then
+    pct=$(( splan * 100 / plimit ))
     if (( mins > 0 && wctx < plimit )); then
-      local rem=$(( (plimit - wctx) * mins / ctx ))
+      local rem=$(( (plimit - wctx) * mins / splan ))
       if (( rem >= 60 )); then eta=" ~$(( rem / 60 ))h$(printf '%02d' $(( rem % 60 )))m"
       else eta=" ~${rem}m"; fi
     elif (( wctx >= plimit )); then
@@ -183,8 +186,8 @@ PYEOF
   # Percentages
   local p_pct=0 d_pct=0 w_pct=0
   if (( plimit > 0 )); then
-    (( pctx > 0 )) && p_pct=$(( pctx * 100 / plimit ))
-    (( dctx > 0 )) && d_pct=$(( dctx * 100 / plimit ))
+    (( pplan > 0 )) && p_pct=$(( pplan * 100 / plimit ))
+    (( dplan > 0 )) && d_pct=$(( dplan * 100 / plimit ))
     (( wctx > 0 )) && w_pct=$(( wctx * 100 / plimit + w_base_pct ))
   fi
 

@@ -206,24 +206,29 @@ print(f'proj_count={len(pitems)}')
   s_cost=$(calc_cost "$s_tin" "$s_tout" "$s_tcw" "$s_tcr" "$s_model")
   d_ctx=$(( d_tin + d_tcw + d_tcr ))
   d_cost=$(calc_cost "$d_tin" "$d_tout" "$d_tcw" "$d_tcr" "sonnet")
-  w_ctx=$(( w_tin + w_tcw ))  # cache reads excluded — re-reads inflate count without new compute
+  w_ctx=$(( w_tin + w_tcw ))
   cp_ctx=$(( cp_tin + cp_tcw + cp_tcr ))
+
+  # Plan usage: exclude cache reads (re-reads inflate count without new compute)
+  s_plan=$(( s_tin + s_tcw ))
+  d_plan=$(( d_tin + d_tcw ))
+  cp_plan=$(( cp_tin + cp_tcw ))
 
   # ── Percentages ──
   s_pct=0; d_pct=0; w_pct=0; cp_pct=0
   if (( plimit > 0 )); then
-    s_pct=$(( s_ctx * 100 / plimit ))
-    d_pct=$(( d_ctx * 100 / plimit ))
+    s_pct=$(( s_plan * 100 / plimit ))
+    d_pct=$(( d_plan * 100 / plimit ))
     w_pct=$(( w_ctx * 100 / plimit + w_base_pct ))
-    cp_pct=$(( cp_ctx * 100 / plimit ))
+    cp_pct=$(( cp_plan * 100 / plimit ))
   fi
 
   # ── ETA ──
   eta=""
-  if (( plimit > 0 && s_ctx > 0 && s_dur_sec > 60 )); then
+  if (( plimit > 0 && s_plan > 0 && s_dur_sec > 60 )); then
     mins=$(( s_dur_sec / 60 ))
-    if (( s_ctx < plimit )); then
-      rem=$(( (plimit - s_ctx) * mins / s_ctx ))
+    if (( s_plan < plimit )); then
+      rem=$(( (plimit - s_plan) * mins / s_plan ))
       if (( rem >= 60 )); then eta="~$(( rem / 60 ))h$(printf '%02d' $(( rem % 60 )))m"
       else eta="~${rem}m"; fi
     else
