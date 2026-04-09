@@ -55,14 +55,11 @@ get_status_lines() {
     return
   fi
 
-  eval "$(python3 - "$file" "$project_dir" "$CLAUDE_DIR" "$SCRIPT_DIR" <<'PYEOF'
+  eval "$(python3 - "$file" "$project_dir" "$CLAUDE_DIR" <<'PYEOF'
 import json, sys, os
 from datetime import datetime, timezone
 
 session_file, proj_dir, base = sys.argv[1], sys.argv[2], sys.argv[3]
-script_dir = sys.argv[4]
-sys.path.insert(0, script_dir)
-from ccbar_parse import parse_window
 
 def sum_tokens(filepath):
     ti=to=cw=cr=tu=tl=er=0
@@ -148,49 +145,20 @@ pctx=ptin+ptcw+ptcr
 pplan=ptin+ptcw  # plan usage: no cache reads
 pcost=(ptin*3+ptout*15+ptcw*3.75+ptcr*0.3)/1e6
 
-# 3. All projects today
-dtin,dtout,dtcw,dtcr,dsess=daily_sum(base)
-dctx=dtin+dtcw+dtcr
-dplan=dtin+dtcw  # plan usage: no cache reads
-dcost=(dtin*3+dtout*15+dtcw*3.75+dtcr*0.3)/1e6
-
-# 4. 5h window (gap-detected, hour-aligned via parse_window)
-wdata=parse_window(base)
-wtin=wdata["input_tokens"];wtout=wdata["output_tokens"]
-wtcw=wdata["cache_write_tokens"];wtcr=wdata["cache_read_tokens"]
-wsess=wdata["sessions"];_bp=wdata.get("base_pct",0)
-wctx=wtin+wtcw  # cache reads excluded — re-reads inflate count without new compute
-
 print(f'ctx={ctx};splan={splan};tin={tin};tout={tout};dur="{dur}";mins={mins}')
 print(f'turns={turns};tools={tools};errors={errors};cost="{scost:.2f}";cache_pct="{cache_pct}"')
 print(f'ptin={ptin};ptout={ptout};pctx={pctx};pplan={pplan};psess={psess};pcost="{pcost:.2f}"')
-print(f'dtin={dtin};dtout={dtout};dctx={dctx};dplan={dplan};dsess={dsess};dcost="{dcost:.2f}"')
-print(f'wctx={wctx};wsess={wsess}')
-print(f'w_base_pct={_bp}')
 PYEOF
   )" 2>/dev/null
 
-  local plimit pct eta
+  local plimit pct
   plimit=$(plan_limit)
-  pct=0; eta=""
-  if (( plimit > 0 && splan > 0 )); then
-    pct=$(( splan * 100 / plimit ))
-    if (( mins > 0 && wctx < plimit )); then
-      local rem=$(( (plimit - wctx) * mins / splan ))
-      if (( rem >= 60 )); then eta=" ~$(( rem / 60 ))h$(printf '%02d' $(( rem % 60 )))m"
-      else eta=" ~${rem}m"; fi
-    elif (( wctx >= plimit )); then
-      eta=" ⚠exceeded"
-    fi
-  fi
+  pct=0
+  (( plimit > 0 && splan > 0 )) && pct=$(( splan * 100 / plimit ))
 
   # Percentages
-  local p_pct=0 d_pct=0 w_pct=0
-  if (( plimit > 0 )); then
-    (( pplan > 0 )) && p_pct=$(( pplan * 100 / plimit ))
-    (( dplan > 0 )) && d_pct=$(( dplan * 100 / plimit ))
-    (( wctx > 0 )) && w_pct=$(( wctx * 100 / plimit + w_base_pct ))
-  fi
+  local p_pct=0
+  (( plimit > 0 && pplan > 0 )) && p_pct=$(( pplan * 100 / plimit ))
 
   # Color codes
   local R='\033[0m' DIM='\033[2m'
@@ -204,39 +172,30 @@ PYEOF
   else sc=$GREEN; fi
 
   # Line 1: this session
-  printf "${BG} ${GREY}󰚩${R}${BG} ${sc}$(fmt_t $ctx)${R}${BG}${GREY}/$(fmt_t $plimit)${R}${BG} ${BLUE}↑$(fmt_t $tin)${R}${BG} ${CYAN}↓$(fmt_t $tout)${R}${BG} ${YELLOW}\$${cost}${R}${BG} ${GREY}${dur}${R}${BG}${ORANGE}${eta}${R}${BG} ${GREY}│${R}${BG} ${DIM}${turns}t ${tools}tc${R}${BG} ${GREEN}⚡${cache_pct}%%${R}${BG}"
+  printf "${BG} ${GREY}󰚩${R}${BG} ${sc}$(fmt_t $ctx)${R}${BG}${GREY}/$(fmt_t $plimit)${R}${BG} ${BLUE}↑$(fmt_t $tin)${R}${BG} ${CYAN}↓$(fmt_t $tout)${R}${BG} ${YELLOW}\$${cost}${R}${BG} ${GREY}${dur}${R}${BG} ${GREY}│${R}${BG} ${DIM}${turns}t ${tools}tc${R}${BG} ${GREEN}⚡${cache_pct}%%${R}${BG}"
   if (( errors > 0 )); then printf " ${RED}${errors}err${R}${BG}"; fi
 
   echo ""
 
-  # Line 2: project today | global today | limit bar
-  local pc dc wc
+  # Line 2: project today | limit bar
+  local pc
   if   (( p_pct >= 80 )); then pc=$RED; elif (( p_pct >= 50 )); then pc=$YELLOW; else pc=$GREEN; fi
-  if   (( w_pct >= 80 )); then wc=$RED; elif (( w_pct >= 50 )); then wc=$YELLOW; else wc=$GREEN; fi
-  if   (( d_pct >= 80 )); then dc=$RED; elif (( d_pct >= 50 )); then dc=$YELLOW; else dc=$GREEN; fi
 
   printf "${BG} ${DIM}proj${R}${BG} ${YELLOW}\$${pcost}${R}${BG} ${GREY}${psess}sess${R}${BG}"
-  printf " ${GREY}│${R}${BG} ${DIM}total${R}${BG} ${YELLOW}\$${dcost}${R}${BG} ${GREY}${dsess}sess${R}${BG}"
 
   if (( plimit > 0 )); then
     printf " ${GREY}│${R}${BG} "
-    local bar_len=12 s_fill p_fill w_fill d_fill
+    local bar_len=12 s_fill p_fill
     s_fill=$(( pct * bar_len / 100 ))
     p_fill=$(( p_pct * bar_len / 100 ))
-    w_fill=$(( w_pct * bar_len / 100 ))
-    d_fill=$(( d_pct * bar_len / 100 ))
     (( s_fill > bar_len )) && s_fill=$bar_len
     (( p_fill > bar_len )) && p_fill=$bar_len
-    (( w_fill > bar_len )) && w_fill=$bar_len
-    (( d_fill > bar_len )) && d_fill=$bar_len
     for (( i=0; i<bar_len; i++ )); do
       if (( i < s_fill )); then printf "${sc}█${R}${BG}"
       elif (( i < p_fill )); then printf "${pc}▓${R}${BG}"
-      elif (( i < w_fill )); then printf "${wc}▒${R}${BG}"
-      elif (( i < d_fill )); then printf "${dc}░${R}${BG}"
       else printf "${GREY}░${R}${BG}"; fi
     done
-    printf " ${sc}s${pct}%%${R}${BG} ${pc}p${p_pct}%%${R}${BG} ${wc}w${w_pct}%%${R}${BG} ${dc}t${d_pct}%%${R}${BG}"
+    printf " ${sc}s${pct}%%${R}${BG} ${pc}p${p_pct}%%${R}${BG}"
   fi
 }
 
