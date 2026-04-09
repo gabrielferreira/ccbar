@@ -9,8 +9,8 @@ Live Claude Code metrics in your terminal. Track token usage, costs, plan limits
 
 **Top bar** (persistent header at the top of your terminal):
 ```
- 󰚩 9.4M/44k ↑7.6k ↓35.5k $5.77 1h39m ~38m │ 183t 109tc ⚡94.1%
- today ↑16.0k ↓169.2k $26.83 12sess │ █████████░░░░░░ 21%/56%
+ 󰚩 9.4M/1.3M ↑7.6k ↓35.5k $5.77 1h39m │ 183t 109tc ⚡94.1%
+ proj $5.77 3sess │ ████░░░░░░░░ s21% p35%
 ```
 
 **Dashboard** (full tab with detailed breakdown):
@@ -33,12 +33,10 @@ Live Claude Code metrics in your terminal. Track token usage, costs, plan limits
   Agent         1 ▪
 
 ────────────────────────────────────────────────────────────────
-  PLAN  Pro — 44k tokens / 5h window (12:00–17:00 UTC)
+  PLAN  Pro — 200k tokens
 
   session  █████████░░░░░░░░░░░░░░░░░░░░░░░░░░  21%  9.4M
   project  ████████████░░░░░░░░░░░░░░░░░░░░░░░  35%  15.2M
-  5h wind  ████████████████░░░░░░░░░░░░░░░░░░░░  46%  20.1M
-  today    ████████████████████░░░░░░░░░░░░░░░░  56%  24.8M
 
 ────────────────────────────────────────────────────────────────
   TODAY  12 sessions — 24.8M total tokens
@@ -85,8 +83,6 @@ export CLAUDE_PLAN="pro"  # see Plan Limits below for options
 ## How it works
 
 ccbar reads Claude Code's session logs (`~/.claude/projects/**/*.jsonl`) and calculates metrics in real time. The top bar uses ANSI scroll regions to pin a 2-line status header to the top of your terminal — no multiplexer needed.
-
-The 5h window metric estimates your current plan window by detecting gaps in message timestamps and aligning to UTC hour boundaries. Since Claude doesn't expose the exact window reset time locally, this is a heuristic — use `ccbar reset` to correct it manually if needed.
 
 ## Compatibility
 
@@ -154,20 +150,6 @@ The dashboard adapts to your terminal size — content is distributed vertically
 ccbar stop       # stop ccbar for this terminal
 ccbar stop-all   # stop all ccbar processes
 ```
-
-### Window reset
-
-Claude's plan limit resets every 5 hours, but the exact reset time isn't exposed locally. ccbar estimates the current window by analyzing timestamps in the JSONL logs — it detects gaps of 5+ hours between messages and aligns to the nearest full hour (UTC).
-
-If the auto-detection is wrong (e.g., after a rate limit renewal), you can manually mark the window start:
-
-```bash
-ccbar reset        # mark current moment as window start (0% base)
-ccbar reset 20     # mark start with 20% base usage (from web/other machines)
-ccbar reset-clear  # remove manual reset, go back to auto-detection
-```
-
-The base percentage is useful when you've been using Claude on the web or another machine — that usage counts against your plan but doesn't appear in local logs.
 
 ### Per-project filtering
 
@@ -243,22 +225,25 @@ set -ga status-right ' #(~/.config/ccbar/claude_status.sh session)'
 
 ## Plan Limits
 
-Set `CLAUDE_PLAN` to track token usage against your plan's estimated limit per 5-hour window:
+Set `CLAUDE_PLAN` to show session and project usage as a percentage of your plan's estimated token limit:
 
 ```bash
 export CLAUDE_PLAN="pro"
 ```
 
-| Plan | Token limit (5h window) |
+| Plan | Token limit (estimated) |
 |---|---|
-| `pro` (default) | 44,000 |
-| `max5` | 88,000 |
-| `max20` | 220,000 |
-| `team` | 55,000 |
-| `team-prem` | 275,000 |
+| `pro` (default) | 200,000 |
+| `max5` | 400,000 |
+| `max20` | 900,000 |
+| `team` | 250,000 |
+| `team-prem` | 1,300,000 |
 | `api` | no limit (context window only) |
 
-> **Note:** These token limits are **community estimates** — Anthropic does not publish official per-window numbers. Actual limits may vary and change without notice.
+> **Note:** These limits are **community estimates** based on observed usage — Anthropic does not publish official numbers. If the percentages don't match Claude.ai's usage meter, set your own limit:
+> ```bash
+> export CLAUDE_PLAN_LIMIT=3870000  # override with your calibrated value
+> ```
 
 ### Color scheme
 
@@ -279,7 +264,7 @@ The full dashboard (`ccbar dashboard`) shows:
 | **Session** | Model, duration, ETA, input/output/cache tokens, cost, turns, tool calls, errors |
 | **Tools** | Breakdown by tool name (Bash, Edit, Read, Write, etc.) with visual bars |
 | **Cache** | Hit rate %, estimated savings in USD |
-| **Plan** | Progress bars: session, project, 5h window, and daily usage against plan limit |
+| **Plan** | Progress bars: session and project usage against plan limit |
 | **Today** | Total tokens, cost, tool calls across all sessions and projects |
 | **Projects** | Per-project breakdown with sessions, tokens, and tool counts |
 
@@ -319,6 +304,7 @@ ccbar bar  # uses ~/.claude-pessoal/projects/
 | Variable | Default | Description |
 |---|---|---|
 | `CLAUDE_PLAN` | `pro` | Plan tier: `pro`, `max5`, `max20`, `team`, `team-prem`, `api` |
+| `CLAUDE_PLAN_LIMIT` | _(from plan)_ | Override token limit (e.g. `export CLAUDE_PLAN_LIMIT=3870000`) |
 | `CLAUDE_PROJECT` | `$PWD` | Project path (for per-project filtering) |
 | `CLAUDE_HOME` | `~/.claude` | Root Claude directory (use `--path` flag or this env var) |
 | `CLAUDE_DIR` | `$CLAUDE_HOME/projects` | Path to Claude Code's project data |
@@ -368,7 +354,7 @@ ccbar bar  # uses ~/.claude-pessoal/projects/
 
 ### `printf: X.X: invalid number` errors
 
-Token counts in some JSONL files are stored as floats (`44000.0` instead of `44000`). This was fixed in [v1.0.0](https://github.com/gabrielferreira/ccbar/releases/tag/v1.1.0). Update your installation:
+Token counts in some JSONL files are stored as floats (`44000.0` instead of `44000`). This was fixed in [v1.1.0](https://github.com/gabrielferreira/ccbar/releases/tag/v1.1.0). Update your installation:
 
 ```bash
 # Homebrew
