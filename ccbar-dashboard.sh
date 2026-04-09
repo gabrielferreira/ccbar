@@ -53,6 +53,7 @@ hline() {
 }
 
 plan_limit() {
+  [[ -n "${CLAUDE_PLAN_LIMIT:-}" ]] && echo "$CLAUDE_PLAN_LIMIT" && return
   case "${CLAUDE_PLAN:-pro}" in
     pro)       echo 200000 ;;
     max5)      echo 400000 ;;

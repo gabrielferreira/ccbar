@@ -32,6 +32,7 @@ fmt_t() {
 }
 
 plan_limit() {
+  [[ -n "${CLAUDE_PLAN_LIMIT:-}" ]] && echo "$CLAUDE_PLAN_LIMIT" && return
   case "${CLAUDE_PLAN:-pro}" in
     pro) echo 200000;; max5) echo 400000;; max20) echo 900000;;
     team) echo 250000;; team-prem) echo 1300000;; api) echo 0;; *) echo 200000;;
