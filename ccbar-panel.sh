@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-INTERVAL="${1:-10}"
+INTERVAL="${1:-60}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT="${CLAUDE_PROJECT:-$PWD}"
 

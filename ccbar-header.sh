@@ -261,7 +261,7 @@ SETUPEOF
     ;;
 
   start)
-    interval=${2:-10}
+    interval=${2:-60}
     # Setup scroll region
     eval "$("$0" setup)"
     # Initial draw

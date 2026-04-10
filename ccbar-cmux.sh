@@ -8,7 +8,7 @@
 
 set -euo pipefail
 
-INTERVAL="${1:-10}"
+INTERVAL="${1:-60}"
 # Resolve symlinks for SCRIPT_DIR
 SOURCE="${BASH_SOURCE[0]}"
 while [[ -L "$SOURCE" ]]; do
